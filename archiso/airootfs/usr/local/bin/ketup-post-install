@@ -15,7 +15,7 @@ rm -f /etc/systemd/system/pacman-init.service \
       /usr/share/applications/ketup-install.desktop \
       /usr/local/bin/ketup-install /usr/local/bin/ketup-pre-initramfs
 rmdir /etc/systemd/system/getty@tty1.service.d /etc/systemd/system/systemd-time-wait-sync.service.d 2>/dev/null
-rm -rf /etc/calamares /usr/share/calamares /etc/skel/Desktop \
+rm -rf /etc/calamares /usr/share/calamares /usr/share/ketup/calamares /etc/skel/Desktop \
        /etc/skel/.config/{plasma-welcomerc,kscreenlockerrc,powerdevilrc,powermanagementprofilesrc,kwalletrc,kded5rc,systemd}
 # persistent, size-limited journal; no live-only volatile storage
 printf '[Journal]\nSystemMaxUse=200M\n' > /etc/systemd/journald.conf.d/volatile-storage.conf

@@ -41,7 +41,7 @@ Edit `archiso/packages_desktop.x86_64` to add or remove packages.
 ## Rebranding checklist
 
 Replace `ketup-os/ketup-iso` URLs in `archiso/airootfs/etc/os-release`, `profiledef.sh` and `archiso/airootfs/usr/share/calamares/branding/ketup/branding.desc` with your repo.
-Default time zone in the installer is Asia/Kolkata (`archiso/airootfs/etc/calamares/modules/locale.conf`).
+Default time zone in the installer is Asia/Kolkata (`archiso/airootfs/usr/share/ketup/calamares/modules/locale.conf`).
 
 ## Credits & license
 

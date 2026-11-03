@@ -31,7 +31,7 @@ jobs:
           python3 -m pip install --quiet pyyaml
           python3 - <<'PY'
           import glob, yaml
-          files = glob.glob('archiso/airootfs/etc/calamares/**/*.conf', recursive=True) + glob.glob('archiso/airootfs/usr/share/calamares/branding/ketup/branding.desc')
+          files = glob.glob('archiso/airootfs/usr/share/ketup/calamares/**/*.conf', recursive=True) + glob.glob('archiso/airootfs/usr/share/calamares/branding/ketup/branding.desc')
           for f in files: yaml.safe_load(open(f))
           print(len(files), 'files OK')
           PY
