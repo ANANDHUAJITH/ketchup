@@ -22,10 +22,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: ShellCheck (errors only)
-        run: |
-          shopt -s globstar nullglob
-          shellcheck -S warning -s bash ci-build.sh archiso/airootfs/usr/local/bin/ketup-*
+      - name: ShellCheck (warnings and errors)
+        run: shellcheck -S warning -s bash ci-build.sh archiso/airootfs/usr/local/bin/ketup-*
       - name: YAML sanity (Calamares configs)
         run: |
           python3 -m pip install --quiet pyyaml
@@ -41,14 +39,14 @@ jobs:
     needs: lint
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    outputs:
-      builddate: ${{ steps.date.outputs.builddate }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Get build date
         id: date
-        run: echo "builddate=$(date +'%y%m%d')" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "builddate=$(date +'%y%m%d')" >> "$GITHUB_OUTPUT"
+          echo "isodate=$(date +'%Y.%m.%d')" >> "$GITHUB_OUTPUT"
 
       - name: Free disk space
         run: |
@@ -61,32 +59,58 @@ jobs:
           docker run --rm --privileged \
             -v "$PWD":/work -w /work \
             archlinux:base-devel ./ci-build.sh
+          # files created by the container are root-owned; hand them back to the runner user
+          sudo chown -R "$(id -u):$(id -g)" .
 
-      - name: Show result
-        run: ls -lh out/desktop/
+      - name: Prepare release files
+        run: |
+          cd out/desktop
+          ls -lh
+          iso="$(ls ./*.iso | head -n1)"; iso="${iso#./}"
+          size="$(stat -c %s "$iso")"
+          echo "ISO: $iso ($size bytes)"
+          {
+            echo "Ketup ISO built on ${{ steps.date.outputs.isodate }} from commit \`${GITHUB_SHA::7}\`."
+            echo
+            echo "Write it to a USB stick with \`dd\`, Ventoy, balenaEtcher or KDE ISO Image Writer."
+            echo "Verify with: \`sha256sum -c $iso.sha256\`"
+          } > ../release-notes.md
+          # GitHub release assets are limited to 2 GiB per file: split if needed
+          if [ "$size" -ge 2147483648 ]; then
+            split -b 1900M -d --suffix-length=2 "$iso" "$iso.part"
+            rm "$iso"
+            {
+              echo
+              echo "**This ISO is larger than GitHub's 2 GiB file limit, so it is split in parts.** Download all \`$iso.part*\` files, then join them:"
+              echo
+              echo "    cat $iso.part* > $iso"
+              echo "    sha256sum -c $iso.sha256"
+            } >> ../release-notes.md
+          fi
 
-      - name: Upload ISO artifact
+      - name: Remove previous nightly release
+        if: github.event_name != 'pull_request' && !startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release delete nightly --cleanup-tag --yes --repo "$GITHUB_REPOSITORY" || true
+
+      - name: Publish release (fast download, raw ISO)
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'nightly' }}
+          name: ${{ startsWith(github.ref, 'refs/tags/v') && format('Ketup {0}', github.ref_name) || format('Ketup nightly {0}', steps.date.outputs.isodate) }}
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+          body_path: out/release-notes.md
+          files: out/desktop/*
+          fail_on_unmatched_files: true
+
+      - name: Upload ISO artifact (pull requests only)
+        if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: ketup-iso-${{ steps.date.outputs.builddate }}
           path: out/desktop/*
           if-no-files-found: error
           compression-level: 0
-
-      - name: Check ISO fits GitHub release limit (2 GiB per file)
-        id: size
-        run: |
-          iso=$(ls out/desktop/*.iso)
-          sz=$(stat -c %s "$iso")
-          echo "ISO size: $sz bytes"
-          if [ "$sz" -lt 2147483648 ]; then echo "release=true" >> "$GITHUB_OUTPUT"; else echo "release=false" >> "$GITHUB_OUTPUT"; echo "::warning::ISO is larger than 2 GiB, so it is attached as a workflow artifact only"; fi
-
-      - name: Publish release (tags only)
-        if: startsWith(github.ref, 'refs/tags/v') && steps.size.outputs.release == 'true'
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            out/desktop/*.iso
-            out/desktop/*.sha256
-            out/desktop/*.pkgs.txt
-          generate_release_notes: true
+          retention-days: 3
