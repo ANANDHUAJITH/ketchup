@@ -133,7 +133,6 @@ passt
 catatonit
 flatpak
 flatpak-kcm
-discover
 # --- installer + repo plumbing
 cachyos-calamares-next
 cachyos-keyring
@@ -145,3 +144,28 @@ inxi
 usbutils
 pciutils
 libnotify
+# --- developer + networking/OS-study toolkit (more groups: ketup-devtools)
+base-devel
+gdb
+strace
+ltrace
+valgrind
+perf
+bpftrace
+man-db
+man-pages
+tmux
+linux-zen-headers
+tcpdump
+wireshark-cli
+nmap
+traceroute
+mtr
+bind
+ethtool
+iperf3
+socat
+openbsd-netcat
+nftables
+conntrack-tools
+whois

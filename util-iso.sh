@@ -67,8 +67,11 @@ generate_motd() {
 Welcome to [38;2;230;58;46mKetup[0m - a fast, slim Arch-based system on the linux-zen kernel.
 Run [1mketup-install[0m to start the installer (or use the desktop icon).
 
-Change the logo any time:      ketup-logo
+Rebrand name/logo/hostname:    sudo ketup-rebrand   (logo only: ketup-logo)
 Choose where apps are stored:  ketup-apps-location
+Study labs (net, kmod, boot):  ketup-lab list   |   notes: /usr/share/doc/ketup/STUDY.md
+More dev tools:                ketup-devtools list
+Something wrong? Diagnostics:  ketup-doctor
 Containers (distrobox):        distrobox create -n arch -i archlinux && distrobox enter arch
 
 Built on Arch Linux archiso and the CachyOS Live ISO (GPL-3.0).
@@ -80,6 +83,32 @@ fetch_cachyos_mirrorlist() {
     local _mirrorlist_url="https://github.com/CachyOS/CachyOS-PKGBUILDS/raw/master/cachyos-mirrorlist/cachyos-mirrorlist"
 
     curl -sSL "${_mirrorlist_url}" > ${src_dir}/archiso/airootfs/etc/pacman.d/cachyos-mirrorlist
+}
+
+# CachyOS' calamares is sometimes built against an older boost than Arch currently ships
+# (error: "libboost_python.so.1.91.0: cannot open shared object file"). Pull the matching
+# old boost-libs from the Arch Linux Archive and make them available under /usr/lib/ketup-compat.
+# Override the version with BOOST_COMPAT_VERSION=1.91.0 ; set it to "none" to skip.
+fetch_boost_compat() {
+    local _ver="${BOOST_COMPAT_VERSION:-1.91.0}"
+    [ "${_ver}" = "none" ] && return 0
+    local _dest="${src_dir}/archiso/airootfs/usr/lib/ketup-compat"
+    local _base="https://archive.archlinux.org/packages/b/boost-libs/"
+    local _tmp; _tmp="$(mktemp -d)"
+    local _file
+    _file="$(curl -fsSL "${_base}" | grep -o "boost-libs-${_ver//./\\.}-[0-9]*-x86_64\.pkg\.tar\.zst" | sort -uV | tail -n1)"
+    if [ -z "${_file}" ]; then
+        echo "WARNING: boost-libs ${_ver} not found in the Arch Linux Archive; calamares may fail to start" >&2
+        rm -rf "${_tmp}"; return 0
+    fi
+    curl -fsSL -o "${_tmp}/${_file}" "${_base}${_file}" || { echo "WARNING: could not download ${_file}" >&2; rm -rf "${_tmp}"; return 0; }
+    mkdir -p "${_dest}"
+    bsdtar -xf "${_tmp}/${_file}" -C "${_tmp}" --include 'usr/lib/libboost*' 2>/dev/null
+    cp -a "${_tmp}"/usr/lib/libboost*.so."${_ver}"* "${_dest}/" 2>/dev/null
+    mkdir -p "${src_dir}/archiso/airootfs/etc/ld.so.conf.d"
+    echo "/usr/lib/ketup-compat" > "${src_dir}/archiso/airootfs/etc/ld.so.conf.d/ketup-compat.conf"
+    echo "boost compat: installed $(ls "${_dest}" | wc -l) libs from ${_file}"
+    rm -rf "${_tmp}"
 }
 
 change_grub_version() {
@@ -130,6 +159,7 @@ prepare_profile(){
 
     # Fetch up-to-date CachyOS repo mirrorlist (upstream repo)
     fetch_cachyos_mirrorlist
+    fetch_boost_compat
 
     generate_motd
 

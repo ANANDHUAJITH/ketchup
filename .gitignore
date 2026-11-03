@@ -20,3 +20,7 @@ archiso/airootfs/etc/environment
 archiso/airootfs/etc/pacman.d/cachyos-mirrorlist
 archiso/airootfs/etc/edition-tag
 archiso/airootfs/etc/version-tag
+
+# fetched at build time
+archiso/airootfs/usr/lib/ketup-compat/
+archiso/airootfs/etc/ld.so.conf.d/ketup-compat.conf

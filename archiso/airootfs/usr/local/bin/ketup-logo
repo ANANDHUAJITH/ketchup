@@ -26,6 +26,7 @@ refresh() {
     local dir="$1"
     command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -f -t "$dir" 2>/dev/null
     [ "$EUID" -eq 0 ] && return 0
+    command -v kwriteconfig6 >/dev/null && kwriteconfig6 --file kdeglobals --group Icons --key Theme ketup
     command -v kbuildsycoca6 >/dev/null && kbuildsycoca6 --noincremental >/dev/null 2>&1
     dbus-send --session --type=signal /KGlobalSettings org.kde.KGlobalSettings.notifyChange int32:4 int32:0 2>/dev/null
     systemctl --user restart plasma-plasmashell.service 2>/dev/null || true

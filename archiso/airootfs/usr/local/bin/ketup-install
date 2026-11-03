@@ -9,4 +9,5 @@ inxi -F >> "$log" 2>&1 || true
 # (shipping it in /etc/calamares would conflict with the package at build time).
 sudo mkdir -p /etc/calamares
 sudo cp -rf /usr/share/ketup/calamares/. /etc/calamares/
+sudo ldconfig 2>/dev/null   # picks up /usr/lib/ketup-compat (older boost for calamares)
 exec pkexec-wrapper calamares -D6 >> "$log" 2>&1

@@ -1,0 +1,187 @@
+#!/bin/bash
+# ketup-rebrand - rename and re-skin this OS, live or installed.
+#
+#   ketup-rebrand                      guided: dialogs on the desktop, questions in a terminal
+#   ketup-rebrand --name "MyOS" [--id myos] [--hostname box] [--logo f.svg|f.png]
+#                 [--accent '#rrggbb'] [--wallpaper image.png]
+#   ketup-rebrand --show               print the current branding
+#   ketup-rebrand --reset              restore the original Ketup branding
+#
+# Changes: os-release (name shown in Settings > About, fastfetch, GRUB), /etc/issue,
+# lsb-release, hostname, logo (menu button + About), installer text (live session),
+# accent colour and wallpaper. Needs administrator rights for the system part.
+set -u
+ROOT="${KETUP_ROOT:-}"
+OSREL="$ROOT/etc/os-release"
+DEF_NAME="Ketup"; DEF_ID="ketup"
+
+gui() { command -v kdialog >/dev/null && [ -n "${WAYLAND_DISPLAY:-}${DISPLAY:-}" ] && [ -z "${KETUP_NOGUI:-}" ]; }
+die() { echo "ketup-rebrand: $*" >&2; gui && kdialog --error "$*"; exit 1; }
+slug() { echo "$1" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9._-]/-/g;s/--*/-/g;s/^-//;s/-$//'; }
+getkey() { sed -n "s/^$1=\"\?\([^\"]*\)\"\?\$/\1/p" "$OSREL" | head -n1; }
+setkey() {  # setkey FILE KEY VALUE  (quoted value, replace or append)
+    if grep -q "^$2=" "$1" 2>/dev/null; then sed -i "s|^$2=.*|$2=\"$3\"|" "$1"; else echo "$2=\"$3\"" >> "$1"; fi
+}
+hex2rgb() { local h="${1#\#}"; [[ "$h" =~ ^[0-9a-fA-F]{6}$ ]] || return 1; printf '%d,%d,%d' "0x${h:0:2}" "0x${h:2:2}" "0x${h:4:2}"; }
+
+show() {
+    echo "Name:      $(getkey PRETTY_NAME)"
+    echo "ID:        $(getkey ID)"
+    echo "Hostname:  $(cat "$ROOT/etc/hostname" 2>/dev/null)"
+}
+
+# ---------------------------------------------------------------- root part
+root_apply() {
+    local NAME="$1" ID="$2" HOST="$3" LOGO="$4" ACCENT="$5" WALL="$6"
+    [ -n "$ROOT" ] || [ "$EUID" -eq 0 ] || die "root part must run as root"
+    # os-release: make it a real file (a symlink into /usr/lib is overwritten by package updates)
+    if [ -L "$OSREL" ]; then cp --remove-destination "$(readlink -f "$OSREL")" "$OSREL"; fi
+    [ -f "$OSREL" ] || die "$OSREL not found"
+    setkey "$OSREL" NAME "$NAME"
+    setkey "$OSREL" PRETTY_NAME "$NAME"
+    if [ -n "$ID" ]; then
+        setkey "$OSREL" ID "$ID"
+        grep -q '^ID_LIKE=' "$OSREL" || echo 'ID_LIKE=arch' >> "$OSREL"
+    fi
+    # lsb-release / ketup-release / issue / motd
+    for f in "$ROOT/etc/ketup-release" "$ROOT/etc/lsb-release"; do
+        [ -f "$f" ] && { sed -i "s|^DISTRIB_ID=.*|DISTRIB_ID=$(slug "$NAME")|;s|^DISTRIB_DESCRIPTION=.*|DISTRIB_DESCRIPTION=\"$NAME\"|" "$f"; }
+    done
+    printf '%s \\r (\\l)\n\n' "$NAME" > "$ROOT/etc/issue"
+    [ -f "$ROOT/etc/motd" ] && sed -i "s/Ketup/$NAME/g;s/$(getkey PRETTY_NAME)/$NAME/g" "$ROOT/etc/motd"
+    # hostname
+    if [ -n "$HOST" ]; then
+        echo "$HOST" > "$ROOT/etc/hostname"
+        if [ -z "$ROOT" ]; then hostnamectl set-hostname "$HOST" 2>/dev/null || hostname "$HOST"; fi
+        if grep -q '^127.0.1.1' "$ROOT/etc/hosts" 2>/dev/null; then
+            sed -i "s|^127.0.1.1.*|127.0.1.1 $HOST.localdomain $HOST|" "$ROOT/etc/hosts"
+        else echo "127.0.1.1 $HOST.localdomain $HOST" >> "$ROOT/etc/hosts"; fi
+    fi
+    # installer branding (only exists on the live ISO)
+    local B="$ROOT/usr/share/calamares/branding/ketup/branding.desc"
+    if [ -f "$B" ]; then
+        sed -i -E "s|^(    productName:\s+).*|\1$NAME|;s|^(    shortProductName:\s+).*|\1$NAME|;s|^(    versionedName:\s+).*|\1$NAME|;s|^(    shortVersionedName:\s+).*|\1$NAME|;s|^(    bootloaderEntryName:\s+).*|\1$NAME|" "$B"
+    fi
+    # logo (system-wide)
+    if [ -n "$LOGO" ]; then
+        if [ -n "$ROOT" ]; then echo "(test mode) would set logo $LOGO"; else
+            ketup-logo set "$LOGO" || die "could not set logo"
+            case "${LOGO,,}" in
+              *.svg) local D="$ROOT/usr/share/calamares/branding/ketup"
+                     if [ -f "$D/branding.desc" ]; then
+                         cp -f "$LOGO" "$D/logo.svg"; cp -f "$LOGO" "$D/icon.svg"; cp -f "$LOGO" "$D/welcome.svg"
+                         sed -i -E 's|productLogo:.*|productLogo:         "logo.svg"|;s|productIcon:.*|productIcon:         "icon.svg"|;s|productWelcome:.*|productWelcome:      "welcome.svg"|' "$D/branding.desc"
+                     fi ;;
+            esac
+        fi
+    fi
+    # accent colour: default for new users
+    if [ -n "$ACCENT" ]; then
+        local rgb; rgb="$(hex2rgb "$ACCENT")" && {
+            mkdir -p "$ROOT/etc/xdg"
+            if command -v kwriteconfig6 >/dev/null; then kwriteconfig6 --file "$ROOT/etc/xdg/kdeglobals" --group General --key AccentColor "$rgb"
+            else printf '[General]\nAccentColor=%s\n' "$rgb" >> "$ROOT/etc/xdg/kdeglobals"; fi
+        }
+    fi
+    # wallpaper: store system-wide so every user can pick it
+    if [ -n "$WALL" ]; then
+        local ext="${WALL##*.}"; install -Dm644 "$WALL" "$ROOT/usr/share/wallpapers/$NAME-custom.$ext"
+    fi
+    # GRUB menu title on an installed system
+    if [ -z "$ROOT" ] && [ ! -d /run/archiso ] && [ -f /etc/default/grub ]; then
+        sed -i "s|^GRUB_DISTRIBUTOR=.*|GRUB_DISTRIBUTOR=\"$NAME\"|" /etc/default/grub
+        [ -f /boot/grub/grub.cfg ] && grub-mkconfig -o /boot/grub/grub.cfg >/dev/null 2>&1 && echo "GRUB menu updated"
+    fi
+    mkdir -p "$ROOT/etc/ketup"; printf 'NAME="%s"\nID="%s"\n' "$NAME" "${ID:-$(getkey ID)}" > "$ROOT/etc/ketup/brand.conf"
+    echo "System branding updated: $NAME"
+}
+
+# ---------------------------------------------------------------- user part (desktop look)
+user_apply() {
+    local ACCENT="$1" WALL="$2" LOGO="$3" NAME="$4"
+    [ -n "$LOGO" ] && rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/icons/ketup"   # system logo wins over a stale personal one
+    command -v kwriteconfig6 >/dev/null && kwriteconfig6 --file kdeglobals --group Icons --key Theme ketup
+    [ -n "$ACCENT" ] && command -v plasma-apply-colorscheme >/dev/null && plasma-apply-colorscheme --accent-color "$ACCENT" >/dev/null 2>&1
+    if [ -n "$WALL" ] && command -v plasma-apply-wallpaperimage >/dev/null; then
+        local f; f="$(ls /usr/share/wallpapers/"$NAME"-custom.* 2>/dev/null | head -n1)"; plasma-apply-wallpaperimage "${f:-$WALL}" >/dev/null 2>&1
+    fi
+    command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -f -t /usr/share/icons/ketup 2>/dev/null
+    command -v kbuildsycoca6 >/dev/null && kbuildsycoca6 --noincremental >/dev/null 2>&1
+    dbus-send --session --type=signal /KGlobalSettings org.kde.KGlobalSettings.notifyChange int32:4 int32:0 2>/dev/null
+    systemctl --user restart plasma-plasmashell.service 2>/dev/null || true
+}
+
+run_user_part_as_invoker() {  # when started via sudo, switch back to the real user
+    local u="${SUDO_USER:-}"; [ -z "$u" ] && [ -n "${PKEXEC_UID:-}" ] && u="$(id -nu "$PKEXEC_UID")"
+    [ -z "$u" ] && return 0
+    local uid; uid="$(id -u "$u")"
+    runuser -u "$u" -- env XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+        "$0" --user-apply "$@"
+}
+
+ask() {  # ask "prompt" "default" -> echo answer
+    if gui; then kdialog --title "Ketup rebrand" --inputbox "$1" "$2" 2>/dev/null; else read -r -p "$1 [$2]: " a; echo "${a:-$2}"; fi
+}
+askfile() {  # optional file
+    if gui; then kdialog --title "$1" --getopenfilename "$HOME" "$2" 2>/dev/null; else read -r -p "$1 (path, empty to skip): " a; echo "$a"; fi
+}
+
+# ---------------------------------------------------------------- argument handling
+NAME=""; ID=""; HOST=""; LOGO=""; ACCENT=""; WALL=""; MODE="auto"
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --name) NAME="$2"; shift 2 ;;
+        --id) ID="$2"; shift 2 ;;
+        --hostname) HOST="$2"; shift 2 ;;
+        --logo) LOGO="$(realpath "$2")"; shift 2 ;;
+        --accent) ACCENT="$2"; shift 2 ;;
+        --wallpaper) WALL="$(realpath "$2")"; shift 2 ;;
+        --show) show; exit 0 ;;
+        --reset) MODE=reset; shift ;;
+        --root-apply) MODE=root; shift ;;
+        --user-apply) MODE=user; shift ;;
+        -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
+        *) die "unknown option $1 (see --help)" ;;
+    esac
+done
+
+case "$MODE" in
+    root) root_apply "$NAME" "$ID" "$HOST" "$LOGO" "$ACCENT" "$WALL"; exit $? ;;
+    user) user_apply "$ACCENT" "$WALL" "$LOGO" "$NAME"; exit 0 ;;
+    reset) NAME="$DEF_NAME"; ID="$DEF_ID"; ACCENT='#e63a2e'
+           LOGO=/usr/share/ketup/logo-icon.default.svg ;;
+    auto)
+        if [ -z "$NAME$ID$HOST$LOGO$ACCENT$WALL" ]; then
+            cur="$(getkey NAME)"; [ -z "$cur" ] && cur="$DEF_NAME"
+            NAME="$(ask 'Operating system name' "$cur")" || exit 0
+            HOST="$(ask 'Hostname (leave as is to keep)' "$(cat "$ROOT/etc/hostname" 2>/dev/null)")" || exit 0
+            LOGO="$(askfile 'Choose your logo (SVG or PNG), Cancel to skip' 'image/svg+xml image/png|SVG or PNG image')"
+            ACCENT="$(ask 'Accent colour as #rrggbb (empty to skip)' '')"
+            WALL="$(askfile 'Choose a wallpaper, Cancel to skip' 'image/png image/jpeg|Images')"
+            [ "$HOST" = "$(cat "$ROOT/etc/hostname" 2>/dev/null)" ] && HOST=""
+        fi ;;
+esac
+
+[ -z "$NAME" ] && NAME="$(getkey NAME)"
+[[ "$NAME" =~ ^[A-Za-z0-9\ ._+-]{1,40}$ ]] || die "name may only contain letters, digits, spaces and . _ + - (max 40 characters)"
+[ -n "$ACCENT" ] && ! hex2rgb "$ACCENT" >/dev/null && die "accent must look like #e63a2e"
+[ -n "$LOGO" ] && [ ! -f "$LOGO" ] && die "logo file not found: $LOGO"
+[ -n "$WALL" ] && [ ! -f "$WALL" ] && die "wallpaper file not found: $WALL"
+[ "$MODE" = auto ] && [ -z "$ID" ] && ID=""   # ID is only changed when asked (--id)
+[ -n "$ID" ] && ID="$(slug "$ID")"
+[ -n "$HOST" ] && [[ ! "$HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9-]{0,62}$ ]] && die "invalid hostname: $HOST"
+
+# --- system part
+args=(--root-apply --name "$NAME")
+[ -n "$ID" ] && args+=(--id "$ID"); [ -n "$HOST" ] && args+=(--hostname "$HOST")
+[ -n "$LOGO" ] && args+=(--logo "$LOGO"); [ -n "$ACCENT" ] && args+=(--accent "$ACCENT"); [ -n "$WALL" ] && args+=(--wallpaper "$WALL")
+if [ -n "$ROOT" ] || [ "$EUID" -eq 0 ]; then
+    "$0" "${args[@]}" || exit 1
+    [ "$EUID" -eq 0 ] && [ -z "$ROOT" ] && run_user_part_as_invoker --name "$NAME" ${ACCENT:+--accent "$ACCENT"} ${WALL:+--wallpaper "$WALL"} ${LOGO:+--logo "$LOGO"}
+else
+    if command -v pkexec >/dev/null && gui; then pkexec "$(realpath "$0")" "${args[@]}" || die "authentication failed or cancelled"
+    else sudo "$(realpath "$0")" "${args[@]}" || exit 1; fi
+    user_apply "$ACCENT" "$WALL" "$LOGO" "$NAME"
+fi
+gui && kdialog --passivepopup "Rebrand applied: $NAME. Some places update after you log out and in." 6
+echo "Done. Log out and back in to see the name everywhere."
