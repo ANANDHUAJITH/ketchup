@@ -1,0 +1,11 @@
+NAME="Ketup"
+PRETTY_NAME="Ketup Linux"
+ID=ketup
+ID_LIKE=arch
+BUILD_ID=rolling
+ANSI_COLOR="38;2;230;58;46"
+HOME_URL="https://github.com/ketup-os/ketup-iso"
+DOCUMENTATION_URL="https://github.com/ketup-os/ketup-iso#readme"
+SUPPORT_URL="https://github.com/ketup-os/ketup-iso/discussions"
+BUG_REPORT_URL="https://github.com/ketup-os/ketup-iso/issues"
+LOGO=ketup-logo

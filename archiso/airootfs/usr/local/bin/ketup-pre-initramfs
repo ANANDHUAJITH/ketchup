@@ -1,0 +1,26 @@
+#!/bin/bash
+# Runs inside the target chroot, BEFORE mkinitcpio.
+# archiso empties /boot, and the live preset is archiso-specific, so rebuild both.
+for d in /usr/lib/modules/*/; do
+    [ -f "${d}pkgbase" ] && [ -f "${d}vmlinuz" ] || continue
+    base="$(cat "${d}pkgbase")"
+    install -Dm644 "${d}vmlinuz" "/boot/vmlinuz-${base}"
+    cat > "/etc/mkinitcpio.d/${base}.preset" <<EOF
+ALL_config="/etc/mkinitcpio.conf"
+ALL_kver="/boot/vmlinuz-${base}"
+PRESETS=('default' 'fallback')
+default_image="/boot/initramfs-${base}.img"
+fallback_image="/boot/initramfs-${base}-fallback.img"
+fallback_options="-S autodetect"
+EOF
+done
+rm -f /etc/mkinitcpio.conf.d/archiso.conf
+# GRUB defaults (the Calamares grubcfg module may add on top of these)
+if [ -f /etc/default/grub ]; then
+    sed -i 's|^GRUB_DISTRIBUTOR=.*|GRUB_DISTRIBUTOR="Ketup"|' /etc/default/grub
+    sed -i 's|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT="quiet loglevel=3 nowatchdog zswap.enabled=0"|' /etc/default/grub
+    grep -q '^GRUB_DISABLE_OS_PROBER' /etc/default/grub \
+        && sed -i 's|^#\?GRUB_DISABLE_OS_PROBER=.*|GRUB_DISABLE_OS_PROBER=false|' /etc/default/grub \
+        || echo 'GRUB_DISABLE_OS_PROBER=false' >> /etc/default/grub
+fi
+exit 0

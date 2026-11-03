@@ -1,0 +1,2 @@
+{ "logo": { "source": "arch_small", "color": { "1": "red" } },
+  "modules": ["title","separator","os","kernel","uptime","packages","shell","de","cpu","gpu","memory","disk"] }

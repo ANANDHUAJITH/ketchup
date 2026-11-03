@@ -1,0 +1,71 @@
+#!/bin/bash
+# ketup-logo - change the Ketup logo (panel menu icon, "about" logo, installer) after boot.
+#   ketup-logo                 pick a file in a dialog (graphical session)
+#   ketup-logo set FILE        use an SVG or PNG as your logo (this user only)
+#   sudo ketup-logo set FILE   same, but for every user on this machine
+#   ketup-logo reset           go back to the default Ketup logo
+set -u
+SYS=/usr/share/icons/ketup
+NAMES_PLACES=(start-here-kde-plasma start-here-kde start-here-kde-symbolic start-here start-here-ketup distributor-logo distributor-logo-ketup distributor-logo-archlinux)
+NAMES_APPS=(ketup-logo ketup)
+
+die() { echo "ketup-logo: $*" >&2; command -v kdialog >/dev/null && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && kdialog --error "$*"; exit 1; }
+
+png_to_svg() {  # wrap a PNG in an SVG so it works as a scalable icon everywhere
+    local f="$1" w h
+    w=$(od -An -tu1 -j16 -N4 "$f" | awk '{print $1*16777216+$2*65536+$3*256+$4}')
+    h=$(od -An -tu1 -j20 -N4 "$f" | awk '{print $1*16777216+$2*65536+$3*256+$4}')
+    [ "${w:-0}" -gt 0 ] && [ "${h:-0}" -gt 0 ] || die "not a valid PNG: $f"
+    local s x y
+    s=$(( w > h ? w : h )); x=$(( (s-w)/2 )); y=$(( (s-h)/2 ))
+    printf '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 %d %d" width="%d" height="%d"><image x="%d" y="%d" width="%d" height="%d" xlink:href="data:image/png;base64,%s"/></svg>\n' \
+        "$s" "$s" "$s" "$s" "$x" "$y" "$w" "$h" "$(base64 -w0 "$f")"
+}
+
+refresh() {
+    local dir="$1"
+    command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -f -t "$dir" 2>/dev/null
+    [ "$EUID" -eq 0 ] && return 0
+    command -v kbuildsycoca6 >/dev/null && kbuildsycoca6 --noincremental >/dev/null 2>&1
+    dbus-send --session --type=signal /KGlobalSettings org.kde.KGlobalSettings.notifyChange int32:4 int32:0 2>/dev/null
+    systemctl --user restart plasma-plasmashell.service 2>/dev/null || true
+}
+
+install_logo() {  # $1 = svg file, $2 = target icon theme dir
+    local svg="$1" dir="$2" n
+    mkdir -p "$dir/scalable/places" "$dir/scalable/apps"
+    [ -f "$dir/index.theme" ] || cp "$SYS/index.theme" "$dir/index.theme"
+    for n in "${NAMES_PLACES[@]}"; do cp -f "$svg" "$dir/scalable/places/$n.svg"; done
+    for n in "${NAMES_APPS[@]}";   do cp -f "$svg" "$dir/scalable/apps/$n.svg";   done
+}
+
+cmd="${1:-pick}"
+case "$cmd" in
+    pick)
+        command -v kdialog >/dev/null && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] || { sed -n '2,6p' "$0"; exit 0; }
+        f="$(kdialog --title 'Choose your Ketup logo' --getopenfilename "$HOME" 'image/svg+xml image/png|SVG or PNG image')" || exit 0
+        exec "$0" set "$f" ;;
+    set)
+        f="${2:-}"; [ -f "$f" ] || die "give an SVG or PNG file: ketup-logo set my-logo.svg"
+        tmp="$(mktemp --suffix=.svg)"; trap 'rm -f "$tmp"' EXIT
+        case "${f,,}" in
+            *.svg) cp "$f" "$tmp" ;;
+            *.png) png_to_svg "$f" > "$tmp" ;;
+            *) die "only .svg and .png are supported" ;;
+        esac
+        if [ "$EUID" -eq 0 ]; then
+            install_logo "$tmp" "$SYS"
+            install -Dm644 "$tmp" /usr/share/ketup/logo-icon.svg
+            install -Dm644 "$tmp" /usr/share/icons/hicolor/scalable/apps/ketup-logo.svg
+            refresh "$SYS"; echo "System-wide Ketup logo updated."
+        else
+            d="${XDG_DATA_HOME:-$HOME/.local/share}/icons/ketup"
+            install_logo "$tmp" "$d"; refresh "$d"; echo "Your Ketup logo is updated ($d)."
+            command -v kdialog >/dev/null && [ -n "${WAYLAND_DISPLAY:-}${DISPLAY:-}" ] && kdialog --passivepopup "Logo updated" 4
+        fi ;;
+    reset)
+        if [ "$EUID" -eq 0 ]; then exec "$0" set /usr/share/ketup/logo-icon.default.svg; fi
+        rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/icons/ketup"; refresh /dev/null; echo "Back to the default logo." ;;
+    -h|--help|help) sed -n '2,6p' "$0" ;;
+    *) die "unknown command '$cmd' (try: ketup-logo --help)" ;;
+esac

@@ -1,0 +1,4 @@
+#!/bin/bash
+# Rank the fastest Arch mirrors for your location.
+[ "$EUID" -ne 0 ] && exec pkexec "$0" "$@"
+exec reflector --protocol https --latest 20 --sort rate --save /etc/pacman.d/mirrorlist "$@"

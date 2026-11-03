@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Install Ketup
+Comment=Install Ketup to your computer
+Exec=ketup-install
+Icon=ketup-logo
+Terminal=false
+Categories=System;

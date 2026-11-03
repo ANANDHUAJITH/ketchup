@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Choose Where Apps Install
+Comment=Put Flatpak apps and containers on the drive you choose
+Exec=ketup-apps-location
+Icon=drive-harddisk
+Terminal=false
+Categories=Settings;System;

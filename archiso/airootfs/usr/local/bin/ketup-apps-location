@@ -1,0 +1,72 @@
+#!/bin/bash
+# ketup-apps-location - choose WHERE software gets installed.
+#   ketup-apps-location                       graphical chooser
+#   ketup-apps-location flatpak DIR           add a Flatpak install location "ketup-extra" at DIR
+#   ketup-apps-location distrobox DIR         store new Distrobox/Podman containers under DIR
+#   ketup-apps-location status                show current locations
+# Pacman packages always live in /usr (they are built for fixed paths); to put them on
+# another disk, mount that disk at /opt, /var/lib/flatpak or /var in /etc/fstab instead.
+set -u
+INST=/etc/flatpak/installations.d/ketup-extra.conf
+SC="${XDG_CONFIG_HOME:-$HOME/.config}/containers/storage.conf"
+gui() { command -v kdialog >/dev/null && [ -n "${WAYLAND_DISPLAY:-}${DISPLAY:-}" ]; }
+say() { echo "$*"; gui && kdialog --msgbox "$*" >/dev/null 2>&1; }
+die() { echo "ketup-apps-location: $*" >&2; gui && kdialog --error "$*"; exit 1; }
+
+check_dir() {  # must be a real POSIX filesystem (hardlinks + xattrs), not NTFS/FAT
+    local d="$1"; mkdir -p "$d" 2>/dev/null || [ -d "$d" ] || die "cannot create $d"
+    case "$(stat -f -c %T "$d")" in
+        ext2/ext3|ext4|ext2|btrfs|xfs|f2fs|zfs|overlayfs|tmpfs) return 0 ;;
+        *) die "$d is on a '$(stat -f -c %T "$d")' filesystem. Use an ext4, btrfs, xfs or f2fs drive (NTFS/exFAT/FAT cannot hold apps)." ;;
+    esac
+}
+
+do_flatpak() {
+    local dir; dir="$(realpath -m "$1")/flatpak"
+    [ "$EUID" -ne 0 ] && exec pkexec "$0" flatpak "$1"
+    check_dir "$dir"
+    mkdir -p /etc/flatpak/installations.d
+    cat > "$INST" <<EOF
+[Installation "ketup-extra"]
+Path=$dir
+DisplayName=Ketup apps ($dir)
+StorageType=harddisk
+EOF
+    flatpak remote-add --installation=ketup-extra --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo 2>/dev/null
+    say "Flatpak location ready: $dir
+Install with:  flatpak install --installation=ketup-extra flathub <app>
+(KDE Discover also lists it as \"Ketup apps\".)"
+}
+
+do_distrobox() {
+    local dir; dir="$(realpath -m "$1")/containers/storage"
+    check_dir "$dir"
+    mkdir -p "$(dirname "$SC")"
+    [ -f "$SC" ] && cp "$SC" "$SC.bak"
+    printf '[storage]\ndriver = "overlay"\ngraphroot = "%s"\n' "$dir" > "$SC"
+    say "New Distrobox/Podman containers will be stored in:
+$dir
+Existing containers stay where they are (they will not show until you switch back). Backup: $SC.bak"
+}
+
+status() {
+    echo "Flatpak extra location: $( [ -f "$INST" ] && sed -n 's/^Path=//p' "$INST" || echo 'not set')"
+    echo "Podman/Distrobox storage: $( [ -f "$SC" ] && sed -n 's/^graphroot *= *"\(.*\)"/\1/p' "$SC" || echo 'default (~/.local/share/containers)')"
+    echo "Pacman packages: /usr (fixed; mount another disk at /opt or /var if you need more room)"
+}
+
+case "${1:-gui}" in
+    flatpak)  [ -n "${2:-}" ] || die "usage: ketup-apps-location flatpak DIR"; do_flatpak "$2" ;;
+    distrobox) [ -n "${2:-}" ] || die "usage: ketup-apps-location distrobox DIR"; do_distrobox "$2" ;;
+    status) status ;;
+    gui)
+        gui || { sed -n '2,7p' "$0"; exit 0; }
+        what="$(kdialog --title 'Where should apps be installed?' --radiolist 'Choose what to relocate:' \
+            flatpak 'Flatpak apps (extra location, chosen drive)' on \
+            distrobox 'Distrobox / Podman containers' off \
+            both 'Both' off)" || exit 0
+        dir="$(kdialog --title 'Choose a folder on the drive to use' --getexistingdirectory "$HOME")" || exit 0
+        [ "$what" != distrobox ] && do_flatpak "$dir"
+        [ "$what" != flatpak ] && do_distrobox "$dir" ;;
+    *) sed -n '2,7p' "$0" ;;
+esac

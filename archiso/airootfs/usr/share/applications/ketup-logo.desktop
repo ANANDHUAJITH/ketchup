@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Change Ketup Logo
+Comment=Use your own logo for the menu button and branding
+Exec=ketup-logo
+Icon=ketup-logo
+Terminal=false
+Categories=Settings;DesktopSettings;
