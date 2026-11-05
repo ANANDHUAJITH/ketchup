@@ -1,0 +1,36 @@
+#!/bin/bash
+# Runs inside the target chroot, AFTER the bootloader: strip live-only settings.
+rm -f /etc/systemd/system/pacman-init.service \
+      /etc/systemd/system/multi-user.target.wants/pacman-init.service \
+      /etc/systemd/system/etc-pacman.d-gnupg.mount \
+      /etc/systemd/system/getty@tty1.service.d/autologin.conf \
+      /etc/systemd/system-generators/systemd-gpt-auto-generator \
+      /etc/systemd/logind.conf.d/do-not-suspend.conf \
+      /etc/systemd/system/systemd-time-wait-sync.service.d/override.conf \
+      /etc/plasmalogin.conf /etc/plasmalogin.conf.d/autologin.conf \
+      /etc/polkit-1/rules.d/49-nopasswd_global.rules \
+      /etc/sudoers.d/g_wheel /etc/motd /etc/ssh/sshd_config.d/10-archiso.conf \
+      /etc/subuid /etc/subgid /etc/version-tag /etc/edition-tag \
+      /root/.automated_script.sh /root/.zlogin \
+      /usr/share/applications/ketchup-install.desktop \
+      /usr/local/bin/ketchup-install /usr/local/bin/ketchup-pre-initramfs
+rmdir /etc/systemd/system/getty@tty1.service.d /etc/systemd/system/systemd-time-wait-sync.service.d 2>/dev/null
+rm -rf /etc/calamares /usr/share/calamares /usr/share/ketchup/calamares /usr/lib/ketchup-compat /etc/ld.so.conf.d/ketchup-compat.conf /etc/skel/Desktop \
+       /etc/skel/.config/{plasma-welcomerc,kscreenlockerrc,powerdevilrc,powermanagementprofilesrc,kwalletrc,kded5rc,systemd}
+# persistent, size-limited journal; no live-only volatile storage
+printf '[Journal]\nSystemMaxUse=200M\n' > /etc/systemd/journald.conf.d/volatile-storage.conf
+# the live image ships an empty root password: lock it (users get sudo via wheel)
+passwd -l root >/dev/null 2>&1
+# keyring + services
+pacman-key --init >/dev/null 2>&1 && pacman-key --populate archlinux cachyos >/dev/null 2>&1
+# the live image trusts the CachyOS repo without signatures ("Optional TrustAll") so it can be built;
+# an installed system must verify them once the keyring is populated
+if pacman-key --list-keys 2>/dev/null | grep -qi cachyos; then
+    sed -i '/^\[cachyos\]/,/^$/ s/^SigLevel.*/SigLevel = Required DatabaseOptional/' /etc/pacman.conf
+fi
+# Limine pins/updates are handled by ketchup-limine (pacman hook); make sure the menu exists
+/usr/local/bin/ketchup-limine update >/dev/null 2>&1 || true
+pacman -Rns --noconfirm cachyos-calamares-next mkinitcpio-archiso >/dev/null 2>&1
+systemctl enable reflector.timer ketchup-firstboot.service >/dev/null 2>&1
+systemctl set-default graphical.target >/dev/null 2>&1
+exit 0

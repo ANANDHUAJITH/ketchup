@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Ketchup blue-mode reset check
+Comment=Makes sure blue mode never survives a restart
+Exec=ketchup-blue-reset-check
+Icon=ketchup-logo
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

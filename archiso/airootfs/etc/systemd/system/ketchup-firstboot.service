@@ -1,0 +1,11 @@
+[Unit]
+Description=Ketchup first-boot online setup (Flathub, GPU drivers)
+After=NetworkManager.service
+ConditionPathExists=!/var/lib/ketchup/firstboot-done
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/ketchup-firstboot
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Install Ketchup
+Comment=Install Ketchup to your computer
+Exec=ketchup-install
+Icon=ketchup-logo
+Terminal=false
+Categories=System;

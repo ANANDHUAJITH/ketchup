@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Ketchup first login setup
+Exec=/usr/local/bin/ketchup-first-login
+OnlyShowIn=KDE;
+X-KDE-autostart-phase=2
+NoDisplay=true

@@ -8,7 +8,7 @@ pacman-key --init
 pacman-key --populate archlinux
 # CachyOS repo: calamares, ananicy-cpp, paru and keyring come from here
 sed -i '/^\[core\]$/i [cachyos]\nSigLevel = Optional TrustAll\nServer = https://mirror.cachyos.org/repo/$arch/$repo\n' /etc/pacman.conf
-pacman -Syu --noconfirm --needed archiso mkinitcpio-archiso squashfs-tools grub git sudo curl dosfstools mtools libisoburn
+pacman -Syu --noconfirm --needed archiso mkinitcpio-archiso squashfs-tools grub git sudo curl dosfstools mtools libisoburn limine
 
 useradd -m builder
 echo 'builder ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers

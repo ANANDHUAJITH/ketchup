@@ -1,0 +1,38 @@
+#!/bin/bash
+# ketchup-blue-core - shared functions for mythical-blue-ketchup / the-legacy-red-ketchup /
+# ketchup-blue-vault / ketchup-blue-apps / the session-start reset check.
+# Not meant to be run directly: `source` it.
+set -u
+
+# The flag lives in XDG_RUNTIME_DIR, which is tmpfs and private to this login session:
+# it disappears on logout *and* on reboot, which is exactly "blue mode until restart".
+KETCHUP_BLUE_FLAG="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/ketchup-blue-mode"
+
+ketchup_blue_die() { echo "$(basename "$0"): $*" >&2; exit 1; }
+
+ketchup_blue_is_on() { [ -f "$KETCHUP_BLUE_FLAG" ]; }
+
+ketchup_blue_require() {
+    ketchup_blue_is_on || ketchup_blue_die "blue mode isn't on. Run: mythical-blue-ketchup"
+}
+
+# refresh desktop so an icon-theme change shows up immediately (same trick as ketchup-logo)
+ketchup_blue_refresh() {
+    command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -f -t /usr/share/icons/"$1" 2>/dev/null
+    command -v kwriteconfig6 >/dev/null && kwriteconfig6 --file kdeglobals --group Icons --key Theme "$1"
+    command -v gsettings >/dev/null && gsettings set org.gnome.desktop.interface icon-theme "$1" 2>/dev/null
+    command -v kbuildsycoca6 >/dev/null && kbuildsycoca6 --noincremental >/dev/null 2>&1
+    dbus-send --session --type=signal /KGlobalSettings org.kde.KGlobalSettings.notifyChange int32:4 int32:0 2>/dev/null
+    systemctl --user restart plasma-plasmashell.service 2>/dev/null || true
+}
+
+ketchup_blue_enable() {
+    mkdir -p "$(dirname "$KETCHUP_BLUE_FLAG")"
+    date -Iseconds > "$KETCHUP_BLUE_FLAG"
+    ketchup_blue_refresh ketchup-blue
+}
+
+ketchup_blue_disable() {
+    rm -f "$KETCHUP_BLUE_FLAG"
+    ketchup_blue_refresh ketchup
+}

@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ketchup Lens – KetchupVM simulator</title>
+<style>
+:root{--bg:#14090a;--panel:#1f1112;--panel2:#291719;--line:#4a2a2c;--fg:#f3e6dc;--dim:#b39d94;--red:#e63a2e;--ok:#6cc17a;--warn:#e0a73a;--blue:#7aa2f7;--teal:#4fb3a9}
+@media (prefers-color-scheme: light){:root{--bg:#fbf4ef;--panel:#fff;--panel2:#f6e9e2;--line:#e0c9bf;--fg:#2a1517;--dim:#7a625b}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,"Noto Sans",sans-serif}
+header{display:flex;gap:14px;align-items:center;padding:10px 18px;border-bottom:1px solid var(--line);background:var(--panel)}
+header img{height:70px;width:auto}header h1{margin:0;font-size:19px}.sub{color:var(--dim);font-size:13px}
+.wrap{padding:12px 18px;max-width:1500px;margin:auto}
+.bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0}
+button,select,input[type=number]{background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:6px 12px;font:inherit;cursor:pointer}
+button.p{background:var(--red);border-color:var(--red);color:#fff}button:disabled{opacity:.45;cursor:default}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:12px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+.card h3{margin:0 0 6px;font-size:14px;color:var(--red)}
+.note{border-left:3px solid var(--warn);padding:6px 10px;background:var(--panel2);border-radius:0 8px 8px 0;margin:8px 0}
+.mono,textarea,td.m{font-family:ui-monospace,"Noto Sans Mono",monospace;font-size:12.5px}
+textarea{width:100%;height:230px;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px;resize:vertical}
+.badge{display:inline-block;padding:2px 10px;border-radius:99px;font-weight:700;font-size:13px}
+.user{background:var(--teal);color:#062}.kernel{background:var(--red);color:#fff}
+.regs{display:grid;grid-template-columns:repeat(4,1fr);gap:4px}.reg{background:var(--panel2);border-radius:6px;padding:3px 7px}.reg.ch{outline:2px solid var(--warn)}
+table{border-collapse:collapse;width:100%;font-size:12.5px}th,td{padding:2px 6px;border-bottom:1px solid var(--line);text-align:left}
+.frames{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}.fr{border:2px solid var(--line);border-radius:8px;padding:4px 6px;min-height:62px;font-size:11.5px}
+.fr b{font-size:12px}.fr .bytes{font-family:ui-monospace,monospace;font-size:10px;word-break:break-all;color:var(--dim)}
+.pt{display:grid;grid-template-columns:repeat(8,1fr);gap:3px}.pg{border-radius:5px;padding:2px 3px;font-size:10.5px;text-align:center;border:1px solid var(--line);color:var(--dim)}
+.pg.in{color:#111}.ev{display:flex;gap:8px;padding:3px 0;border-bottom:1px solid var(--line);font-size:12.5px}.ev i{flex:0 0 10px;height:10px;border-radius:50%;margin-top:5px}.ev span.c{margin-left:auto;color:var(--dim);white-space:nowrap}
+.k-cpu i{background:var(--blue)}.k-tlb i{background:var(--warn)}.k-cache i{background:var(--teal)}.k-fault i{background:var(--red)}.k-kernel i{background:#a06bd8}.k-disk i{background:#d86b9b}.k-sched i{background:var(--ok)}.k-io i{background:#bbb}
+.stack{display:flex;height:16px;border-radius:8px;overflow:hidden;margin:6px 0}.stack div{height:100%}
+.stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:6px}.stat{background:var(--panel2);border-radius:8px;padding:4px 8px}.stat b{display:block;font-size:17px}
+pre.con{background:#000;color:#9f9;padding:8px;border-radius:8px;min-height:44px;margin:0;white-space:pre-wrap}
+details{margin:6px 0}summary{cursor:pointer;color:var(--red)}
+</style>
+</head>
+<body>
+<header>
+  <img id="mascot" src="../mascot/standing.svg" alt="" onerror="this.style.display='none'">
+  <div><h1>KetchupVM — a computer you can single-step</h1>
+  <div class="sub">CPU → MMU/TLB → L1 cache → RAM frames → disk, plus a tiny kernel: page-fault handler, system calls, scheduler, page cache. Sizes are tiny on purpose so you can see everything.</div></div>
+</header>
+<div class="wrap">
+  <div class="bar">
+    <select id="sample"></select>
+    <button id="load" class="p">Load / reset</button>
+    <button id="step">Step</button><button id="step10">Step ×10</button><button id="run">Run ▶</button>
+    <label>speed <select id="speed"><option value="400">slow</option><option value="120" selected>medium</option><option value="20">fast</option><option value="1">turbo</option></select></label>
+  </div>
+  <div class="bar">
+    <label>RAM frames <select id="frames"><option>2</option><option>4</option><option>6</option><option selected>8</option><option>12</option><option>16</option></select></label>
+    <label>page replacement <select id="policy"><option>LRU</option><option>FIFO</option></select></label>
+    <label>time slice (instr) <input id="quantum" type="number" min="2" max="100" value="12" style="width:70px"></label>
+    <label><input id="flush" type="checkbox" checked> flush TLB on context switch</label>
+  </div>
+  <div id="notebox" class="note"></div>
+  <div id="editors" class="grid"></div>
+  <details><summary>How to read this machine (click)</summary>
+    <div class="note">
+      <b>Address space:</b> each process has 256 bytes of <i>virtual</i> memory = 16 pages × 16 bytes. <b>RAM</b> has only a few 16-byte <i>frames</i>, so most pages live on <b>disk</b> until touched.<br>
+      <b>One memory access:</b> the CPU asks the <b>TLB</b> (a tiny cache of translations). Miss → it <i>walks the page table</i> in RAM. If the page is not present → <b>page fault</b>: the kernel picks a frame (evicting one if RAM is full), reads the page from disk (~2000 cycles!), updates the page table, retries. Then the physical address goes through the <b>L1 cache</b> (4 lines × 4 bytes, direct-mapped): hit = 1 cycle, miss = fetch from RAM (30 cycles).<br>
+      <b>Kernel:</b> SYSCALL switches USER→KERNEL mode. A timer interrupt ends a process's time slice and the scheduler switches to the next one (saving/restoring registers).<br>
+      <b>Instructions:</b> MOV ADD SUB MUL AND OR XOR SHL SHR CMP · JMP JE JNE JL JGE JG JLE · LOAD Rd,[Rs+off] · STORE [Rs+off],Rs|imm · PUSH POP CALL RET · SYSCALL (R0 = number: 1 write(R1=ptr,R2=len), 2 exit, 3 yield, 4 read_file(R1=block,R2=dest), 5 getpid, 6 sleep(R1)) · directives <code>.data ADDR b1 b2…</code> <code>.string ADDR "text"</code> <code>.equ NAME value</code>. Registers are 16-bit; memory is bytes. Instruction fetch is not modelled (code is not stored in RAM).
+    </div>
+  </details>
+  <div class="grid" id="panels"></div>
+</div>
+<script src="kvm-engine.js"></script>
+<script src="kvm-samples.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+function h(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) { if (v === false || v == null) continue; if (k.startsWith("on")) e.addEventListener(k.slice(2), v); else if (k === "style") e.style.cssText = v; else e.setAttribute(k, v); }
+  for (const c of kids.flat()) if (c != null && c !== false) e.append(c.nodeType ? c : document.createTextNode(String(c)));
+  return e;
+}
+const PID_COL = ["#7aa2f7", "#e0a73a", "#4fb3a9", "#d86b9b", "#6cc17a", "#a06bd8"];
+let M = null, timer = null, prevRegs = {}, sampleDef = null;
+
+const SAMPLES = KVM_SAMPLES;
+SAMPLES.forEach((s, i) => $("sample").append(h("option", {value: i}, s.title)));
+
+function buildEditors() {
+  $("editors").replaceChildren(...sampleDef.procs.map((p, i) => h("div", {class: "card"}, h("h3", {}, "Process " + (i + 1) + " source: " + p.name), h("textarea", {id: "src" + i, spellcheck: "false"}, p.src))));
+  $("notebox").textContent = sampleDef.note;
+}
+function applySettings(s) {
+  $("frames").value = s.frames || 8; $("quantum").value = s.quantum || 12;
+}
+function reset() {
+  stop();
+  const opts = {frames: +$("frames").value, policy: $("policy").value, quantum: +$("quantum").value, flushTlb: $("flush").checked};
+  M = KVM.create(opts); prevRegs = {};
+  const errs = [];
+  sampleDef.procs.forEach((p, i) => { const r = M.load($("src" + i).value, p.name); if (r.errors) r.errors.forEach(e => errs.push(`${p.name}, line ${e.line}: ${e.msg}`)); });
+  if (errs.length) { M = null; $("notebox").textContent = "Assembler errors: " + errs.join(" | "); render(); return; }
+  $("notebox").textContent = sampleDef.note; mood("standing"); render();
+}
+function mood(n) { $("mascot").style.display = ""; $("mascot").src = "../mascot/" + n + ".svg"; }
+function doStep(n) {
+  if (!M) return; let more = true, faulted = false;
+  for (let i = 0; i < n && more; i++) { more = M.step(); if (M.last.some(e => e.k === "fault")) faulted = true; }
+  mood(!more ? "sleeping" : faulted ? "angry" : timer ? "fighter" : "standing");
+  if (!more) stop(); render();
+}
+function stop() { if (timer) { clearInterval(timer); timer = null; } $("run").textContent = "Run ▶"; }
+function run() {
+  if (timer) { stop(); mood("standing"); return; }
+  if (!M || M.halted) return;
+  $("run").textContent = "Pause ⏸"; const sp = +$("speed").value;
+  timer = setInterval(() => doStep(sp === 1 ? 50 : 1), sp);
+}
+
+function render() {
+  const P = $("panels"); P.replaceChildren();
+  if (!M) return;
+  const cur = M.procs[M.cur] || M.procs[0], st = M.stats;
+  /* CPU */
+  const regs = h("div", {class: "regs"}, ...KVM.REGS.map((r, i) => { const v = cur.regs[i], ch = prevRegs[cur.pid] && prevRegs[cur.pid][i] !== v; return h("div", {class: "reg mono" + (ch ? " ch" : "")}, r + " " + KVM.hex(v, 4) + " (" + v + ")"); }));
+  prevRegs[cur.pid] = cur.regs.slice();
+  const nextIns = cur.code[cur.pc];
+  P.append(h("div", {class: "card"}, h("h3", {}, "CPU"),
+    h("div", {}, h("span", {class: "badge " + M.mode}, M.mode === "user" ? "USER MODE (ring 3)" : "KERNEL MODE (ring 0)"), "  process ", h("b", {}, cur.pid), " (" + cur.name + ")  ·  cycles ", h("b", {}, M.cycles), M.halted ? "  · HALTED" : ""),
+    h("div", {class: "mono", style: "margin:6px 0"}, "PC = " + cur.pc + "   next: " + (nextIns ? nextIns.text : "(end)") + "   flags: Z=" + (+cur.z) + " N=" + (+cur.n)), regs));
+  /* journey */
+  const evs = M.last.length ? M.last : [{k: "cpu", t: "Press Step to execute the first instruction.", c: 0}];
+  P.append(h("div", {class: "card", style: "grid-column:span 2"}, h("h3", {}, "Last instruction: what every layer did"),
+    ...evs.map(e => h("div", {class: "ev k-" + e.k}, h("i"), h("span", {}, e.t), e.c ? h("span", {class: "c"}, "+" + e.c + " cycles") : null))));
+  /* TLB + cache */
+  const tlbRows = []; for (let i = 0; i < M.cfg.tlbSize; i++) { const e = M.tlb[i]; tlbRows.push(h("tr", {}, h("td", {}, i), h("td", {}, e ? e.pid : "–"), h("td", {}, e ? e.vpn : "–"), h("td", {}, e ? e.pfn : "–"))); }
+  P.append(h("div", {class: "card"}, h("h3", {}, "TLB (translation cache)"), h("table", {}, h("thead", {}, h("tr", {}, ["slot", "pid", "virt page", "→ frame"].map(x => h("th", {}, x)))), h("tbody", {}, tlbRows)),
+    h("div", {class: "sub"}, `hits ${st.tlbHit} · misses ${st.tlbMiss}` + (st.tlbHit + st.tlbMiss ? ` · hit rate ${(100 * st.tlbHit / (st.tlbHit + st.tlbMiss)).toFixed(0)}%` : ""))));
+  P.append(h("div", {class: "card"}, h("h3", {}, "L1 cache (direct-mapped, " + M.cfg.cacheLines + " lines × " + M.cfg.lineSize + " B)"),
+    h("table", {}, h("thead", {}, h("tr", {}, ["line", "valid", "tag", "dirty"].map(x => h("th", {}, x)))), h("tbody", {}, M.cache.map((l, i) => h("tr", {}, h("td", {}, i), h("td", {}, l.valid ? "yes" : "–"), h("td", {}, l.valid ? l.tag : "–"), h("td", {}, l.dirty ? "dirty" : ""))))),
+    h("div", {class: "sub"}, `hits ${st.cacheHit} · misses ${st.cacheMiss}` + (st.cacheHit + st.cacheMiss ? ` · hit rate ${(100 * st.cacheHit / (st.cacheHit + st.cacheMiss)).toFixed(0)}%` : ""))));
+  /* RAM */
+  P.append(h("div", {class: "card", style: "grid-column:span 2"}, h("h3", {}, "RAM: " + M.cfg.frames + " physical frames × 16 bytes"),
+    h("div", {class: "frames"}, ...M.frames.map((f, i) => {
+      const bytes = [...M.ram.slice(i * 16, i * 16 + 16)].map(b => b.toString(16).padStart(2, "0")).join(" ");
+      const pte = f && M.procs.find(p => p.pid === f.pid).pt[f.vpn];
+      return h("div", {class: "fr", style: "border-color:" + (f ? PID_COL[(f.pid - 1) % 6] : "var(--line)")},
+        h("b", {}, "frame " + i), f ? h("span", {}, "  pid " + f.pid + " · page " + f.vpn + (pte && pte.dirty ? " · dirty" : "")) : h("span", {class: "sub"}, "  free"), h("div", {class: "bytes"}, f ? bytes : "")); }))));
+  /* page tables */
+  M.procs.forEach(p => P.append(h("div", {class: "card"}, h("h3", {}, "Page table: process " + p.pid + " (" + p.name + ") · " + p.state + " · " + p.faults + " faults"),
+    h("div", {class: "pt"}, ...p.pt.map((e, v) => h("div", {class: "pg" + (e.present ? " in" : ""), style: e.present ? "background:" + PID_COL[(p.pid - 1) % 6] : "", title: "virtual addresses " + KVM.hex(v * 16) + "–" + KVM.hex(v * 16 + 15)}, v + (e.present ? "→f" + e.pfn + (e.dirty ? "*" : "") : " disk")))),
+    h("div", {class: "sub"}, "virtual page → frame (f), * = modified. “disk” = not in RAM; touching it causes a page fault."))));
+  /* disk + page cache + console */
+  P.append(h("div", {class: "card"}, h("h3", {}, "Kernel page cache (file blocks kept in RAM)"), h("div", {class: "mono"}, M.pageCache.length ? "blocks: " + M.pageCache.join(", ") : "(empty)"),
+    h("div", {class: "sub"}, `hits ${st.pcHit} · misses ${st.pcMiss} · disk reads ${st.diskReads} · disk writes ${st.diskWrites}`), h("h3", {style: "margin-top:10px"}, "Console (output of write())"), h("pre", {class: "con"}, M.console || " ")));
+  /* processes */
+  P.append(h("div", {class: "card"}, h("h3", {}, "Scheduler"), h("table", {}, h("thead", {}, h("tr", {}, ["pid", "name", "state", "instrs", "exit"].map(x => h("th", {}, x)))),
+    h("tbody", {}, M.procs.map(p => h("tr", {}, h("td", {}, p.pid), h("td", {}, p.name), h("td", {}, p.state), h("td", {}, p.instrs), h("td", {}, p.exit == null ? "" : p.exit))))),
+    h("div", {class: "sub"}, `context switches ${st.ctx} · timer interrupts ${st.irq} · syscalls ${st.syscalls}`)));
+  /* stats */
+  const bd = M.breakdown, tot = Object.values(bd).reduce((a, b) => a + b, 0) || 1;
+  const cols = {cpu: "#7aa2f7", mmu: "#e0a73a", cache: "#4fb3a9", ram: "#6cc17a", disk: "#d86b9b", kernel: "#a06bd8"};
+  P.append(h("div", {class: "card", style: "grid-column:span 2"}, h("h3", {}, "Where did the time go? (" + M.cycles + " cycles for " + st.instrs + " instructions)"),
+    h("div", {class: "stack"}, ...Object.entries(bd).map(([k, v]) => h("div", {style: `width:${(100 * v / tot).toFixed(2)}%;background:${cols[k]}`, title: k + ": " + v}))),
+    h("div", {class: "stats"}, ...Object.entries(bd).map(([k, v]) => h("div", {class: "stat"}, h("span", {style: "color:" + cols[k]}, "■ " + k), h("b", {}, v), h("span", {class: "sub"}, (100 * v / tot).toFixed(0) + "%")))),
+    h("div", {class: "sub"}, "CPI (cycles per instruction) = " + (st.instrs ? (M.cycles / st.instrs).toFixed(1) : "–") + ". A perfect machine would score 1.0; everything above that is the memory hierarchy and the kernel making the CPU wait.")));
+}
+
+$("sample").addEventListener("change", () => { sampleDef = SAMPLES[$("sample").value]; applySettings(sampleDef.settings); buildEditors(); reset(); });
+$("load").addEventListener("click", reset);
+$("step").addEventListener("click", () => { stop(); doStep(1); });
+$("step10").addEventListener("click", () => { stop(); doStep(10); });
+$("run").addEventListener("click", run);
+for (const id of ["frames", "policy", "quantum", "flush"]) $(id).addEventListener("change", reset);
+sampleDef = SAMPLES[0]; buildEditors(); reset();
+</script>
+</body>
+</html>

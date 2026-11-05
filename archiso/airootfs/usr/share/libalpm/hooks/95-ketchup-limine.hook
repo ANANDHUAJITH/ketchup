@@ -1,0 +1,18 @@
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Type = Path
+Target = usr/lib/modules/*/vmlinuz
+Target = boot/*-ucode.img
+
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = limine
+
+[Action]
+Description = Updating the Ketchup (Limine) boot menu...
+When = PostTransaction
+Exec = /usr/local/bin/ketchup-limine update

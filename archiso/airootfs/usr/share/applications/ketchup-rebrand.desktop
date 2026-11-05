@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Rebrand This OS
+Comment=Change the OS name, logo, hostname, accent colour and wallpaper
+Exec=ketchup-rebrand
+Icon=ketchup-logo
+Terminal=false
+Categories=Settings;System;

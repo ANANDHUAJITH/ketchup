@@ -1,0 +1,14 @@
+#!/bin/bash
+# the-legacy-red-ketchup - leave blue mode and go back to the normal red Ketchup branding.
+# Does not touch any blue vault or blue app sandbox you made; use
+# ketchup-blue-vault wipe / ketchup-blue-apps wipe for that.
+set -u
+source /usr/local/bin/ketchup-blue-core
+
+if ! ketchup_blue_is_on; then
+    echo "Already on the normal red Ketchup."
+    exit 0
+fi
+
+ketchup_blue_disable
+echo "Back to the-legacy-red-ketchup."

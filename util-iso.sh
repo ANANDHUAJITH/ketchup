@@ -57,21 +57,23 @@ trap_exit() {
 
 generate_motd() {
     cat << 'EOF' > ${src_dir}/archiso/airootfs/etc/motd
-[38;2;230;58;46m  _  __     _
- | |/ /___ | |_ _   _ _ __
- | ' // _ \| __| | | | '_ \
- | . \  __/| |_| |_| | |_) |
- |_|\_\___| \__|\__,_| .__/
-                     |_|[0m
+[38;2;230;58;46m _  __    _       _
+| |/ /___| |_ ___| |__  _   _ _ __
+| ' // _ \ __/ __| '_ \| | | | '_ \
+| . \  __/ || (__| | | | |_| | |_) |
+|_|\_\___|\__\___|_| |_|\__,_| .__/
+                             |_|[0m
 
-Welcome to [38;2;230;58;46mKetup[0m - a fast, slim Arch-based system on the linux-zen kernel.
-Run [1mketup-install[0m to start the installer (or use the desktop icon).
+Welcome to [38;2;230;58;46mKetchup[0m - a fast, slim Arch-based system on the linux-zen kernel.
+Run [1mketchup-install[0m to start the installer (or use the desktop icon).
 
-Rebrand name/logo/hostname:    sudo ketup-rebrand   (logo only: ketup-logo)
-Choose where apps are stored:  ketup-apps-location
-Study labs (net, kmod, boot):  ketup-lab list   |   notes: /usr/share/doc/ketup/STUDY.md
-More dev tools:                ketup-devtools list
-Something wrong? Diagnostics:  ketup-doctor
+Rebrand name/logo/hostname:    sudo ketchup-rebrand   (logo only: ketchup-logo)
+Learn how the OS works:        ketchup-lens sim   |   ketchup-lens trace -- ./program
+Check security / IRQ trouble:  sudo ketchup-audit   |   ketchup-irqfix 27
+Choose where apps are stored:  ketchup-apps-location
+Study labs (net, kmod, boot):  ketchup-lab list   |   notes: /usr/share/doc/ketchup/STUDY.md
+More dev tools:                ketchup-devtools list
+Something wrong? Diagnostics:  ketchup-doctor
 Containers (distrobox):        distrobox create -n arch -i archlinux && distrobox enter arch
 
 Built on Arch Linux archiso and the CachyOS Live ISO (GPL-3.0).
@@ -87,12 +89,12 @@ fetch_cachyos_mirrorlist() {
 
 # CachyOS' calamares is sometimes built against an older boost than Arch currently ships
 # (error: "libboost_python.so.1.91.0: cannot open shared object file"). Pull the matching
-# old boost-libs from the Arch Linux Archive and make them available under /usr/lib/ketup-compat.
+# old boost-libs from the Arch Linux Archive and make them available under /usr/lib/ketchup-compat.
 # Override the version with BOOST_COMPAT_VERSION=1.91.0 ; set it to "none" to skip.
 fetch_boost_compat() {
     local _ver="${BOOST_COMPAT_VERSION:-1.91.0}"
     [ "${_ver}" = "none" ] && return 0
-    local _dest="${src_dir}/archiso/airootfs/usr/lib/ketup-compat"
+    local _dest="${src_dir}/archiso/airootfs/usr/lib/ketchup-compat"
     local _base="https://archive.archlinux.org/packages/b/boost-libs/"
     local _tmp; _tmp="$(mktemp -d)"
     local _file
@@ -106,14 +108,14 @@ fetch_boost_compat() {
     bsdtar -xf "${_tmp}/${_file}" -C "${_tmp}" --include 'usr/lib/libboost*' 2>/dev/null
     cp -a "${_tmp}"/usr/lib/libboost*.so."${_ver}"* "${_dest}/" 2>/dev/null
     mkdir -p "${src_dir}/archiso/airootfs/etc/ld.so.conf.d"
-    echo "/usr/lib/ketup-compat" > "${src_dir}/archiso/airootfs/etc/ld.so.conf.d/ketup-compat.conf"
+    echo "/usr/lib/ketchup-compat" > "${src_dir}/archiso/airootfs/etc/ld.so.conf.d/ketchup-compat.conf"
     echo "boost compat: installed $(ls "${_dest}" | wc -l) libs from ${_file}"
     rm -rf "${_tmp}"
 }
 
 change_grub_version() {
     local _version="$1"
-    sed -i "s/KETUP_VERSION=\".*\"/KETUP_VERSION=\"${_version}\"/" ${src_dir}/archiso/grub/grub.cfg
+    sed -i "s/KETCHUP_VERSION=\".*\"/KETCHUP_VERSION=\"${_version}\"/" ${src_dir}/archiso/grub/grub.cfg
 }
 
 generate_environment() {
@@ -182,6 +184,87 @@ prepare_profile(){
     iso_file=$(gen_iso_fn).iso
 }
 
+# ---------------------------------------------------------------------------
+# Limine: mkarchiso only knows syslinux/systemd-boot/grub, so it first builds a stock ISO
+# (that stays as scaffolding), then we re-pack the very same file tree with Limine as the
+# only bootloader (BIOS + UEFI, hybrid so `dd` to USB works).
+# Test against a local Limine checkout with:  LIMINE_SHARE=/path/to/limine LIMINE_BIN=/path/to/limine/limine
+# ---------------------------------------------------------------------------
+make_limine_iso() {
+    local _iso_out="$1"                      # path of the ISO to (over)write
+    local iso_dir="${work_dir}/iso"
+    local share="${LIMINE_SHARE:-/usr/share/limine}"
+    local limine_bin="${LIMINE_BIN:-limine}"
+    local tmpl="${src_dir}/archiso/limine/limine.conf.in"
+    local f label
+
+    [[ -d "${iso_dir}/arch" ]] || die "Limine: ${iso_dir}/arch not found (did mkarchiso fail?)"
+    for f in limine-bios.sys limine-bios-cd.bin limine-uefi-cd.bin BOOTX64.EFI; do
+        [[ -r "${share}/${f}" ]] || die "Limine: ${share}/${f} missing - install the 'limine' package"
+    done
+    command -v "${limine_bin}" >/dev/null || die "Limine: 'limine' command not found"
+    command -v xorriso >/dev/null || die "Limine: xorriso not found (package libisoburn)"
+
+    label="$(declare -A file_permissions; source "${src_dir}/archiso/profiledef.sh"; echo "${iso_label}")"
+
+    msg2 "Limine: removing syslinux/grub/systemd-boot files from the ISO tree"
+    sudo rm -rf "${iso_dir}/syslinux" "${iso_dir}/boot/syslinux" "${iso_dir}/boot/grub" \
+                "${iso_dir}/EFI" "${iso_dir}/loader" "${iso_dir}/boot/limine"
+    sudo mkdir -p "${iso_dir}/boot/limine" "${iso_dir}/EFI/BOOT"
+
+    # optional pieces: microcode, memtest, EFI shell (only if mkarchiso staged them)
+    local ucode="" tools=""
+    local uc dir   # mkarchiso stages microcode under <install_dir>/boot/ (newer) or /boot/ (older)
+    for uc in amd-ucode.img intel-ucode.img; do
+        for dir in arch/boot boot; do
+            if [[ -f "${iso_dir}/${dir}/${uc}" ]]; then ucode+="    module_path: boot():/${dir}/${uc}"$'\n'; break; fi
+        done
+    done
+    ucode="${ucode%$'\n'}"
+    if [[ -f "${iso_dir}/boot/memtest86+/memtest.efi" ]]; then
+        tools+=$'\n/Memtest86+ (RAM test, UEFI)\n    protocol: efi\n    path: boot():/boot/memtest86+/memtest.efi\n'
+    fi
+    if [[ -f "${iso_dir}/boot/memtest86+/memtest" ]]; then
+        tools+=$'\n/Memtest86+ (RAM test, BIOS)\n    protocol: linux\n    path: boot():/boot/memtest86+/memtest\n'
+    fi
+    if [[ -f "${iso_dir}/shellx64.efi" ]]; then
+        tools+=$'\n/UEFI Shell\n    protocol: efi\n    path: boot():/shellx64.efi\n'
+    fi
+
+    # render limine.conf (keep indentation of nested entries for the microcode lines)
+    local conf; conf="$(mktemp)"
+    UCODE="${ucode}" TOOLS="${tools}" awk '
+        /^@MICROCODE@$/ { if (ENVIRON["UCODE"] != "") print ENVIRON["UCODE"]; next }
+        /^@TOOLS@$/     { printf "%s", ENVIRON["TOOLS"]; next }
+        { print }' "${tmpl}" \
+      | sed -e "s|%INSTALL_DIR%|arch|g" -e "s|%ARCH%|x86_64|g" -e "s|%ISO_LABEL%|${label}|g" > "${conf}"
+    # KETCHUP_LIVE_EXTRA="console=ttyS0" appends extra kernel arguments to every live entry (serial CI/debug)
+    [[ -n "${KETCHUP_LIVE_EXTRA:-}" ]] && sed -i -E "s|^([[:space:]]*cmdline: .*)$|\\1 ${KETCHUP_LIVE_EXTRA}|" "${conf}"
+
+    sudo install -Dm644 "${conf}" "${iso_dir}/boot/limine/limine.conf"
+    rm -f "${conf}"
+    sudo install -Dm644 "${src_dir}/archiso/limine/wallpaper.png" "${iso_dir}/boot/limine/wallpaper.png"
+    for f in limine-bios.sys limine-bios-cd.bin limine-uefi-cd.bin; do
+        sudo install -Dm644 "${share}/${f}" "${iso_dir}/boot/limine/${f}"
+    done
+    sudo install -Dm644 "${share}/BOOTX64.EFI" "${iso_dir}/EFI/BOOT/BOOTX64.EFI"
+    [[ -r "${share}/BOOTIA32.EFI" ]] && sudo install -Dm644 "${share}/BOOTIA32.EFI" "${iso_dir}/EFI/BOOT/BOOTIA32.EFI"
+
+    msg2 "Limine: building ${_iso_out} (label ${label})"
+    local tmp_iso="${_iso_out}.limine.tmp"
+    sudo rm -f "${tmp_iso}"
+    sudo xorriso -as mkisofs \
+        -iso-level 3 -full-iso9660-filenames -joliet -joliet-long -rational-rock \
+        -volid "${label}" -appid "Ketchup Live/Install Medium" -publisher "Ketchup" \
+        -b boot/limine/limine-bios-cd.bin -no-emul-boot -boot-load-size 4 -boot-info-table \
+        --efi-boot boot/limine/limine-uefi-cd.bin -efi-boot-part --efi-boot-image --protective-msdos-label \
+        "${iso_dir}" -o "${tmp_iso}"
+    sudo "${limine_bin}" bios-install "${tmp_iso}"
+    sudo mv -f "${tmp_iso}" "${_iso_out}"
+    sudo chown "${USER}" "${_iso_out}" 2>/dev/null || true
+    msg2 "Limine: done"
+}
+
 run_build() {
     prepare_profile "$1"
     local _profile="$1"
@@ -213,8 +296,11 @@ run_build() {
     sudo mkarchiso -v -w ${work_dir} -o "$outFolder/$_profile" ${work_dir}/archiso/
     sudo chown $USER $outFolder
 
+    # Replace the stock (grub/syslinux) ISO with a Limine one
+    make_limine_iso "$outFolder/$_profile/ketchup-$(date --date="@${SOURCE_DATE_EPOCH:-$(date +%s)}" +%Y.%m.%d)-x86_64.iso"
+
     cp ${work_dir}/iso/arch/pkglist.x86_64.txt "$outFolder/$_profile/$(gen_iso_fn).pkgs.txt"
-    mv "$outFolder/$_profile/ketup-$(date --date="@${SOURCE_DATE_EPOCH:-$(date +%s)}" +%Y.%m.%d)-x86_64.iso" "$outFolder/$_profile/${iso_file}"
+    mv "$outFolder/$_profile/ketchup-$(date --date="@${SOURCE_DATE_EPOCH:-$(date +%s)}" +%Y.%m.%d)-x86_64.iso" "$outFolder/$_profile/${iso_file}"
 
     msg "Done [Build ISO] ${iso_file}"
     msg "Finished building [%s]" "${_profile}"
@@ -252,7 +338,7 @@ run_build() {
 
 gen_iso_fn(){
     local vars=() name
-    vars+=("ketup")
+    vars+=("ketchup")
     [[ -n ${profile} ]] && vars+=("${profile}")
 
     vars+=("linux")

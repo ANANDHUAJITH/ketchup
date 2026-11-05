@@ -1,0 +1,128 @@
+#!/bin/bash
+# ketchup-audit - quick, honest security self-check of a Ketchup system (read-only, changes nothing).
+#
+#   ketchup-audit              run all checks (run with sudo for the complete picture)
+#   ketchup-audit --lynis      also run Lynis (broad hardening audit) and show its score
+#   ketchup-audit --json       machine-readable result
+#
+# PASS = good, INFO = context, WARN = weakens security, FAIL = fix this.  Exit code 1 if any FAIL.
+# This is a checklist, not a guarantee: it cannot prove a system is secure, only find known weak spots.
+# Method and limits: /usr/share/doc/ketchup/SECURITY-EVALUATION.md
+set -u
+JSON=0; LYNIS=0
+for a in "$@"; do case "$a" in --json) JSON=1 ;; --lynis) LYNIS=1 ;; -h|--help) sed -n '2,10p' "$0"; exit 0 ;; esac; done
+[ -t 1 ] && [ "$JSON" = 0 ] && { G=$'\e[32m'; Y=$'\e[33m'; R=$'\e[31m'; B=$'\e[36m'; N=$'\e[0m'; } || { G=""; Y=""; R=""; B=""; N=""; }
+LIVE=0; [ -d /run/archiso ] && LIVE=1
+NP=0; NI=0; NW=0; NF=0; OUT=()
+esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+add() { # add STATUS "title" "detail/fix"
+    case "$1" in PASS) NP=$((NP+1)); c=$G ;; INFO) NI=$((NI+1)); c=$B ;; WARN) NW=$((NW+1)); c=$Y ;; FAIL) NF=$((NF+1)); c=$R ;; esac
+    if [ "$JSON" = 1 ]; then OUT+=("{\"status\":\"$1\",\"check\":\"$(esc "$2")\",\"detail\":\"$(esc "${3:-}")\"}")
+    else printf '  %s%-4s%s %s\n' "$c" "$1" "$N" "$2"; if [ -n "${3:-}" ]; then printf '         %s\n' "$3"; fi; fi
+    return 0
+}
+sec() { [ "$JSON" = 1 ] || printf '\n%s== %s ==%s\n' "$B" "$1" "$N"; }
+sysctl_is() { # sysctl_is key want_min "why"   (numeric: value >= want)
+    local v; v="$(sysctl -n "$1" 2>/dev/null)" || { add INFO "$1: not available on this kernel"; return; }
+    if [ "$v" -ge "$2" ] 2>/dev/null; then add PASS "$1 = $v"; else add WARN "$1 = $v (want >= $2)" "$3  Fix: echo '$1 = $2' | sudo tee /etc/sysctl.d/90-local.conf && sudo sysctl --system"; fi
+}
+
+[ "$JSON" = 1 ] || { echo "Ketchup security audit - $(date '+%F %T') - kernel $(uname -r)"; [ "$EUID" -ne 0 ] && echo "(not root: some checks are skipped; run with sudo for all)"; }
+[ "$LIVE" = 1 ] && add WARN "This is the LIVE session" "Autologin, passwordless sudo/polkit and an open root are intentional here. Audit the INSTALLED system, not the live one."
+
+sec "Boot chain"
+if [ -d /sys/firmware/efi ]; then
+    add PASS "Booted in UEFI mode"
+    sb="$(od -An -tu1 -j4 -N1 /sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c 2>/dev/null | tr -d ' ')"
+    case "$sb" in 1) add PASS "Secure Boot is enabled" ;; 0) add WARN "Secure Boot is disabled" "Anyone with disk access can swap the bootloader/kernel. Ketchup's Limine hash pinning (below) detects tampering of the kernel but cannot replace Secure Boot." ;; *) add INFO "Secure Boot state unknown" ;; esac
+else add WARN "Booted in legacy BIOS mode" "No Secure Boot, no firmware-verified chain. Prefer UEFI."; fi
+if [ -f /boot/limine.conf ]; then
+    grep -q '^editor_enabled: *no' /boot/limine.conf && add PASS "Boot-menu editor disabled (cannot add init=/bin/sh at boot)" || add FAIL "Boot-menu editor enabled" "Anyone at the keyboard can edit kernel arguments, e.g. init=/bin/bash, bypassing login."
+    if grep -q 'vmlinuz[^ ]*#' /boot/limine.conf; then add PASS "Limine hash pinning is ON (kernel + initramfs + config)"; else add INFO "Limine hash pinning is off" "Enable with: sudo ketchup-limine pin on (adds BLAKE2b hashes; a modified kernel/initramfs will refuse to boot)."; fi
+    [ -f /boot/limine.conf ] && ! mountpoint -q /boot && add WARN "/boot is not a separate FAT ESP mount" "Unexpected for Ketchup."
+elif [ -d /boot/grub ]; then add INFO "GRUB fallback bootloader in use (BIOS machine)"; fi
+for f in /sys/devices/system/cpu/vulnerabilities/*; do
+    [ -r "$f" ] || continue; v="$(cat "$f")"; n="${f##*/}"
+    case "$v" in Vulnerable*) add WARN "CPU vulnerability $n: $v" "Check microcode (intel-ucode/amd-ucode) and that mitigations=off is not set." ;; esac
+done
+grep -qE '(^| )mitigations=off' /proc/cmdline && add FAIL "Kernel booted with mitigations=off" "Disables Spectre/Meltdown protections."
+grep -qE '(^| )noirqdebug' /proc/cmdline && add INFO "noirqdebug is set" "Ketchup default: stops the kernel from disabling a misbehaving IRQ. Not a security risk for MSI interrupts; see ketchup-irqfix."
+
+sec "Kernel hardening (sysctl)"
+sysctl_is kernel.kptr_restrict 1 "Hides kernel addresses from unprivileged users (helps against exploits)."
+sysctl_is kernel.dmesg_restrict 1 "Stops normal users reading kernel logs."
+sysctl_is kernel.unprivileged_bpf_disabled 1 "Unprivileged eBPF has a long history of kernel exploits."
+sysctl_is kernel.yama.ptrace_scope 1 "Without it any process can ptrace/read memory of your other processes (needed by ketchup-lens only for your own children)."
+sysctl_is kernel.randomize_va_space 2 "ASLR makes exploit addresses unpredictable."
+sysctl_is fs.protected_symlinks 1 "Blocks classic /tmp symlink races."
+sysctl_is fs.protected_hardlinks 1 "Blocks hardlink privilege tricks."
+sysctl_is fs.protected_regular 1 "Hardens O_CREAT in sticky world-writable dirs."
+sysctl_is kernel.kexec_load_disabled 1 "kexec can load an unverified kernel."
+p="$(sysctl -n kernel.perf_event_paranoid 2>/dev/null)"; [ -n "$p" ] && { [ "$p" -le 1 ] && add INFO "kernel.perf_event_paranoid = $p" "Low value lets ketchup-lens read CPU counters; raise to 3 on a machine you do not use for study." || add PASS "kernel.perf_event_paranoid = $p"; }
+
+sec "Accounts and privilege"
+if [ "$EUID" -eq 0 ]; then
+    st="$(passwd -S root 2>/dev/null | awk '{print $2}')"; [ "$st" = L ] && add PASS "root account is locked (use sudo)" || add WARN "root has a usable password" "Lock it: sudo passwd -l root"
+    empty="$(awk -F: '($2 == "") {print $1}' /etc/shadow | tr '\n' ' ')"; [ -z "$empty" ] && add PASS "no account with an empty password" || add FAIL "empty password: $empty" "Set one or lock: sudo passwd -l NAME"
+    [ "$(awk -F: '$3 == 0' /etc/passwd | wc -l)" -gt 1 ] && add FAIL "more than one UID 0 account" "$(awk -F: '$3 == 0 {print $1}' /etc/passwd | tr '\n' ' ')"
+    nopw="$(grep -rhE '^[^#]*NOPASSWD' /etc/sudoers /etc/sudoers.d 2>/dev/null)"
+    [ -z "$nopw" ] && add PASS "no NOPASSWD in sudoers" || add FAIL "passwordless sudo configured" "$(echo "$nopw" | head -3 | tr '\n' ';')"
+else add INFO "account checks skipped (need root)"; fi
+ls /etc/polkit-1/rules.d/*nopasswd* >/dev/null 2>&1 && add FAIL "polkit nopasswd rule present" "$(ls /etc/polkit-1/rules.d/*nopasswd*)  (live-image leftover: remove it)"
+grep -rqE '^\s*(User|Autologin)' /etc/sddm.conf /etc/sddm.conf.d /etc/plasmalogin.conf /etc/plasmalogin.conf.d 2>/dev/null && [ "$LIVE" = 0 ] && add WARN "display-manager autologin is configured" "Anyone who powers the machine on is logged in. Fine for a VM, risky on a laptop."
+[ "$LIVE" = 0 ] && id liveuser >/dev/null 2>&1 && add FAIL "'liveuser' still exists" "Remove it: sudo userdel -r liveuser"
+lsblk -rno TYPE 2>/dev/null | grep -q crypt && add PASS "disk encryption (dm-crypt/LUKS) is in use" || add WARN "no encrypted volume detected" "A stolen laptop exposes all data. Reinstall with encryption if the machine leaves your desk."
+
+sec "Network exposure"
+if command -v ss >/dev/null; then
+    ex="$(ss -H -tulnp 2>/dev/null | awk '{print $1, $5, $7}' | grep -vE ' (127\.0\.0\.1|\[::1\]|127\.0\.0\.53%lo|\[?::1\]?):' | head -8)"
+    [ -z "$ex" ] && add PASS "no service listens on a non-loopback address" || add WARN "services reachable from the network" "$(echo "$ex" | tr '\n' ';')"
+fi
+if systemctl is-active --quiet nftables 2>/dev/null || systemctl is-active --quiet ufw 2>/dev/null || systemctl is-active --quiet firewalld 2>/dev/null; then add PASS "a firewall service is active"; else add WARN "no firewall service active" "Nothing listens by default, but a firewall is a safety net: sudo pacman -S ufw && sudo systemctl enable --now ufw && sudo ufw enable"; fi
+if systemctl is-active --quiet sshd 2>/dev/null; then
+    add INFO "sshd is running"; grep -rhiE '^\s*PermitRootLogin\s+(yes)' /etc/ssh/sshd_config /etc/ssh/sshd_config.d 2>/dev/null | grep -q . && add FAIL "ssh allows root login"
+    grep -rhiE '^\s*PasswordAuthentication\s+no' /etc/ssh/sshd_config /etc/ssh/sshd_config.d 2>/dev/null | grep -q . || add WARN "ssh accepts passwords" "Use keys and set PasswordAuthentication no."
+fi
+
+sec "Packages and supply chain"
+if [ -r /etc/pacman.conf ]; then
+    grep -qiE '^SigLevel.*(TrustAll|Never)' /etc/pacman.conf && add FAIL "pacman accepts unsigned/untrusted packages" "$(grep -iE '^SigLevel.*(TrustAll|Never)' /etc/pacman.conf | tr '\n' ';')  Fix: set 'SigLevel = Required DatabaseOptional' (the installer does this once the CachyOS keyring is present)."
+    grep -qiE '^SigLevel' /etc/pacman.conf && ! grep -qiE '^SigLevel.*(TrustAll|Never)' /etc/pacman.conf && add PASS "pacman verifies package signatures"
+    sig="$(awk '/^\[/{s=$0} /^SigLevel/{print s" "$0}' /etc/pacman.conf | grep -i optional | grep -vi 'DatabaseOptional' | head -3)"
+    [ -n "$sig" ] && add WARN "a repository has optional package signatures" "$sig"
+fi
+grep -qE '^Server *= *http://' /etc/pacman.d/mirrorlist 2>/dev/null && add WARN "plain-http mirrors in mirrorlist" "Signatures still protect packages, but prefer https."
+if command -v arch-audit >/dev/null; then
+    n="$(arch-audit -q 2>/dev/null | wc -l)"; [ "$n" -eq 0 ] && add PASS "arch-audit: no known-vulnerable installed packages" || add WARN "arch-audit: $n package(s) with known CVEs" "Run: arch-audit -u  then update (sudo pacman -Syu)."
+else add INFO "arch-audit not installed" "sudo pacman -S arch-audit"; fi
+foreign="$(pacman -Qmq 2>/dev/null | wc -l)"; add INFO "$foreign foreign (non-repo/AUR) packages installed" "These get no signature check from pacman: review with: pacman -Qm"
+if [ "$EUID" -eq 0 ] && command -v pacman >/dev/null; then
+    bad="$(pacman -Qkq 2>/dev/null | grep -v ' backup file' | wc -l)"; [ "$bad" -eq 0 ] && add PASS "package files match their checksums" || add INFO "$bad packaged file(s) differ from their package" "Often config files; inspect: sudo pacman -Qkq | grep -v 'backup file'"
+fi
+
+sec "Filesystem and services"
+if [ "$EUID" -eq 0 ]; then
+    ww="$(find /etc /usr /boot -xdev -type f -perm -0002 2>/dev/null | head -5)"; [ -z "$ww" ] && add PASS "no world-writable files in /etc /usr /boot" || add FAIL "world-writable files" "$(echo "$ww" | tr '\n' ' ')"
+    suid="$(find /usr /bin /sbin /opt -xdev -type f -perm -4000 2>/dev/null | wc -l)"; add INFO "$suid SUID-root programs" "Each is a privilege-escalation target. List: find /usr -xdev -perm -4000"
+fi
+if command -v systemd-analyze >/dev/null; then
+    worst="$(systemd-analyze security --no-pager 2>/dev/null | awk 'NR>1 && $NF=="UNSAFE" {print $1}' | head -5 | tr '\n' ' ')"
+    [ -n "$worst" ] && add INFO "services with no systemd sandboxing (UNSAFE): $worst" "See: systemd-analyze security SERVICE"
+fi
+
+if [ "$LYNIS" = 1 ]; then
+    sec "Lynis"
+    if command -v lynis >/dev/null; then
+        lynis audit system --quick --no-colors 2>/dev/null | grep -E 'Hardening index|Warnings|Suggestions|Tests performed' | sed 's/^/  /'
+        add INFO "Full Lynis report: /var/log/lynis-report.dat (needs root)"
+    else add WARN "lynis not installed" "sudo pacman -S lynis"; fi
+fi
+
+if [ "$JSON" = 1 ]; then
+    printf '{"pass":%d,"info":%d,"warn":%d,"fail":%d,"live":%d,"results":[%s]}\n' "$NP" "$NI" "$NW" "$NF" "$LIVE" "$(IFS=,; echo "${OUT[*]}")"
+else
+    printf '\n%sSummary:%s %s%d pass%s, %d info, %s%d warn%s, %s%d fail%s\n' "$B" "$N" "$G" "$NP" "$N" "$NI" "$Y" "$NW" "$N" "$R" "$NF" "$N"
+    echo "This checks configuration, not exploits. For depth: --lynis, then read SECURITY-EVALUATION.md (threat model, fuzzing, reproducible builds)."
+fi
+[ "$NF" -gt 0 ] && exit 1
+exit 0

@@ -1,0 +1,55 @@
+#!/bin/bash
+# ketchup-blue-vault - an encrypted folder that only opens while blue mode is on.
+#   ketchup-blue-vault create   make a new vault (asks for a passphrase)
+#   ketchup-blue-vault open     mount it at ~/BlueVault (asks for the passphrase)
+#   ketchup-blue-vault close    unmount it
+#   ketchup-blue-vault status   show whether it exists / is mounted
+#   ketchup-blue-vault wipe     unmount and permanently delete it (asks to confirm)
+set -u
+source /usr/local/bin/ketchup-blue-core
+
+CIPHER_DIR="$HOME/.ketchup-blue/vault"
+MOUNT_DIR="$HOME/BlueVault"
+
+need_gocryptfs() {
+    command -v gocryptfs >/dev/null || ketchup_blue_die \
+        "gocryptfs isn't installed. Install it with: sudo pacman -S gocryptfs"
+}
+
+is_mounted() { mountpoint -q "$MOUNT_DIR" 2>/dev/null; }
+
+cmd="${1:-status}"
+case "$cmd" in
+    create)
+        ketchup_blue_require
+        need_gocryptfs
+        [ -d "$CIPHER_DIR" ] && ketchup_blue_die "a vault already exists. Use 'open', or 'wipe' to start over."
+        mkdir -p "$CIPHER_DIR" "$MOUNT_DIR"
+        gocryptfs -init "$CIPHER_DIR" || { rmdir "$CIPHER_DIR" 2>/dev/null; exit 1; }
+        echo "Vault created. Open it with: ketchup-blue-vault open" ;;
+    open)
+        ketchup_blue_require
+        need_gocryptfs
+        [ -d "$CIPHER_DIR" ] || ketchup_blue_die "no vault yet. Run: ketchup-blue-vault create"
+        is_mounted && { echo "Already open at $MOUNT_DIR"; exit 0; }
+        mkdir -p "$MOUNT_DIR"
+        gocryptfs "$CIPHER_DIR" "$MOUNT_DIR" && echo "Open at $MOUNT_DIR" ;;
+    close)
+        if is_mounted; then
+            fusermount -u "$MOUNT_DIR" && echo "Closed."
+        else
+            echo "Not open."
+        fi ;;
+    status)
+        [ -d "$CIPHER_DIR" ] || { echo "No vault yet."; exit 0; }
+        if is_mounted; then echo "Vault exists, open at $MOUNT_DIR"; else echo "Vault exists, closed."; fi ;;
+    wipe)
+        is_mounted && fusermount -u "$MOUNT_DIR"
+        [ -d "$CIPHER_DIR" ] || { echo "Nothing to wipe."; exit 0; }
+        read -r -p "Permanently delete the blue vault and everything in it? [y/N] " a
+        [ "${a,,}" = y ] || { echo "Cancelled."; exit 0; }
+        rm -rf "$CIPHER_DIR" "$MOUNT_DIR"
+        echo "Vault deleted." ;;
+    -h|--help|help) sed -n '2,7p' "$0" ;;
+    *) ketchup_blue_die "unknown command '$cmd' (try: ketchup-blue-vault --help)" ;;
+esac

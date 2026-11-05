@@ -1,4 +1,4 @@
-# mkinitcpio preset for linux-zen on the Ketup live ISO
+# mkinitcpio preset for linux-zen on the Ketchup live ISO
 PRESETS=('archiso')
 ALL_kver='/boot/vmlinuz-linux-zen'
 archiso_config='/etc/mkinitcpio.conf.d/archiso.conf'

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Enter Blue Mode
+Comment=Blue branding for this session only, plus a disposable encrypted folder and app sandbox
+Exec=alacritty -e mythical-blue-ketchup
+Icon=ketchup-logo
+Terminal=false
+Categories=System;Settings;

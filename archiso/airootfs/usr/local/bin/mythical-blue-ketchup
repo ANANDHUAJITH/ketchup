@@ -1,0 +1,23 @@
+#!/bin/bash
+# mythical-blue-ketchup - switch into Ketchup's blue mode for this boot only.
+#   - swaps the panel/menu/"about" logo to the blue mark (this login session;
+#     it reverts automatically on logout or restart, or right away with
+#     `the-legacy-red-ketchup`)
+#   - unlocks ketchup-blue-vault (encrypted folders) and ketchup-blue-apps
+#     (a disposable, easy-to-delete sandbox for extra software)
+set -u
+source /usr/local/bin/ketchup-blue-core
+
+ketchup_blue_enable
+
+cat <<'EOF'
+
+  You're in blue mode for this session.
+  It resets to the normal red Ketchup on logout or restart -
+  or right now with: the-legacy-red-ketchup
+
+  While you're here:
+    ketchup-blue-vault create|open|close|status|wipe   encrypted folder
+    ketchup-blue-apps   create|enter|install|list|wipe disposable app sandbox
+
+EOF

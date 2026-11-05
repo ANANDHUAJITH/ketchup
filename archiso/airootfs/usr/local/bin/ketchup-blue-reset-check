@@ -1,0 +1,14 @@
+#!/bin/bash
+# ketchup-blue-reset-check - runs once at the start of every graphical session
+# (see the ketchup-blue-reset-check.desktop autostart entry). kdeglobals
+# remembers whatever icon theme was last set, which would otherwise carry
+# blue mode across a restart; this undoes that unless mythical-blue-ketchup
+# has already been run again in *this* session.
+set -u
+source /usr/local/bin/ketchup-blue-core
+
+ketchup_blue_is_on && exit 0   # this session already (re-)entered blue mode on its own
+
+current="$(kreadconfig6 --file kdeglobals --group Icons --key Theme 2>/dev/null)"
+[ "$current" = "ketchup-blue" ] && ketchup_blue_refresh ketchup
+exit 0

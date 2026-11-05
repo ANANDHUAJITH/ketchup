@@ -1,0 +1,94 @@
+#!/bin/bash
+# ketchup-irqfix - find out who owns an IRQ that the kernel complains about, and fix it.
+#
+#   ketchup-irqfix [N]                  explain IRQ N (default 27): device, driver, type, kernel messages
+#   sudo ketchup-irqfix apply MODE      make a fix permanent on an installed system. MODE is one of:
+#        noirqdebug   kernel never disables a "nobody cared" IRQ (default on Ketchup; safe for MSI/edge IRQs)
+#        irqfixup     keep the safety net, but search all handlers for unhandled IRQs
+#        irqpoll      poll every handler on every IRQ (slow, strongest)
+#        nomsi        add pci=nomsi (avoid message-signalled interrupts)
+#        default      back to Ketchup's default (noirqdebug)
+#
+# Why IRQ 27 specifically? On x86 the first 24 IRQs belong to the IO-APIC pins; numbers above that are
+# normally MSI/MSI-X vectors handed out to PCI devices (NVMe, Wi-Fi, USB, GPU, I2C/LPSS...). The number is
+# not fixed: it is whichever device got it on YOUR machine, hence this tool.
+set -u
+N="${1:-27}"
+EXTRA=/etc/ketchup/boot-extra
+DEFAULT_EXTRA="quiet loglevel=3 nowatchdog zswap.enabled=0 noirqdebug"
+
+apply() {
+    [ "$EUID" -eq 0 ] || exec sudo "$0" apply "$1"
+    [ -d /run/archiso ] && { echo "Live session: edit the boot entry instead (press 'e' in the Limine menu, or pick an entry under 'IRQ troubleshooting')."; exit 1; }
+    local cur; mkdir -p /etc/ketchup
+    cur="$(cat "$EXTRA" 2>/dev/null || echo "$DEFAULT_EXTRA")"
+    cur="$(echo "$cur" | sed -E 's/(^| )(noirqdebug|irqfixup|irqpoll|pci=nomsi)( |$)/ /g; s/  +/ /g')"
+    case "$1" in
+        noirqdebug|irqfixup|irqpoll) cur="$cur $1" ;;
+        nomsi)   cur="$cur pci=nomsi" ;;
+        default) cur="$DEFAULT_EXTRA" ;;
+        *) echo "unknown mode '$1'"; exit 1 ;;
+    esac
+    echo "$cur" > "$EXTRA"; echo "boot options: $cur"
+    if command -v ketchup-limine >/dev/null; then ketchup-limine update
+    elif [ -f /etc/default/grub ]; then
+        sed -i "s|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT=\"$cur\"|" /etc/default/grub && grub-mkconfig -o /boot/grub/grub.cfg
+    fi
+    echo "Reboot to apply."
+    exit 0
+}
+
+[ "${1:-}" = apply ] && apply "${2:-}"
+[[ "$N" =~ ^[0-9]+$ ]] || { sed -n '2,13p' "$0"; exit 0; }
+
+echo "=== IRQ $N ==="
+line="$(grep -E "^ *$N:" /proc/interrupts)"
+if [ -z "$line" ]; then echo "IRQ $N is not in /proc/interrupts (not allocated, or already freed)."; else
+    echo "$line" | awk '{ s=0; for(i=2;i<=NF && $i ~ /^[0-9]+$/;i++) s+=$i; printf "total interrupts so far: %d\n", s }'
+    echo "$line" | sed -E 's/^ *[0-9]+: *([0-9]+ +)+//' | sed 's/^/chip / '
+fi
+S=/sys/kernel/irq/$N
+if [ -d "$S" ]; then
+    for k in chip_name hwirq type name actions per_cpu_count; do [ -r "$S/$k" ] && printf '%-14s %s\n' "$k:" "$(cat "$S/$k")"; done
+fi
+
+echo; echo "=== owning PCI device ==="
+found=""
+for d in /sys/bus/pci/devices/*; do
+    if [ -e "$d/msi_irqs/$N" ] || [ "$(cat "$d/irq" 2>/dev/null)" = "$N" ]; then
+        a="${d##*/}"; found="$a"
+        lspci -s "${a#0000:}" -nnk 2>/dev/null | sed 's/^/  /'
+    fi
+done
+[ -z "$found" ] && echo "  no PCI device claims it (platform device: look at the names above, e.g. i2c_designware, intel-lpss, ACPI GPE)."
+
+echo; echo "=== kernel messages ==="
+if dmesg 2>/dev/null | grep -qE "irq $N:|IRQ #$N"; then
+    dmesg 2>/dev/null | grep -E -A14 "irq $N: nobody cared" | head -30
+    dmesg 2>/dev/null | grep -E "Disabling IRQ #$N"
+else
+    echo "  no 'nobody cared' / 'Disabling IRQ' message for IRQ $N in this boot's log."
+fi
+
+echo; echo "=== current IRQ-related boot options ==="
+grep -oE '(noirqdebug|irqfixup|irqpoll|pci=nomsi|noapic|nolapic)' /proc/cmdline | sort -u | sed 's/^/  /'
+grep -qE 'noirqdebug|irqfixup|irqpoll' /proc/cmdline || echo "  none"
+
+echo; echo "=== what to do ==="
+type_="$(cat "$S/type" 2>/dev/null)"; chip="$(cat "$S/chip_name" 2>/dev/null)"
+if echo "$chip" | grep -qi msi; then
+    echo "  IRQ $N is a message-signalled (MSI) interrupt: edge-triggered, so it cannot storm."
+    echo "  -> noirqdebug is safe (Ketchup's default). The real bug is the driver/firmware of the device above:"
+    echo "     update firmware (fwupdmgr), try the newest kernel, or blacklist the driver if the device is unused."
+elif [ -n "$type_" ]; then
+    if [ "$type_" = level ]; then
+        echo "  IRQ $N is '$chip' / level-triggered (a legacy line, possibly shared)."
+        echo "  -> prefer 'sudo ketchup-irqfix apply irqfixup', then 'irqpoll'. noirqdebug could allow an interrupt storm."
+    else
+        echo "  IRQ $N is '$chip' / '$type_'-triggered: an unhandled edge cannot storm, so noirqdebug is safe."
+        echo "  -> still find the device above; the interrupt is arriving with nobody to handle it."
+    fi
+else
+    echo "  Not enough information (the IRQ is idle right now). Run this again after the problem appears."
+fi
+echo "  Apply a mode permanently:  sudo ketchup-irqfix apply noirqdebug|irqfixup|irqpoll|nomsi|default"

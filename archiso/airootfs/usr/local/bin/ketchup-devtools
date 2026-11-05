@@ -1,0 +1,26 @@
+#!/bin/bash
+# ketchup-devtools - install developer / study toolkits on demand (keeps the ISO small).
+#   ketchup-devtools list | show GROUP | install GROUP...
+declare -A G=(
+ [core]="base-devel gdb strace ltrace valgrind perf bpftrace man-db man-pages tmux"
+ [c]="gcc clang cmake ninja make bear lldb ccache"
+ [rust]="rustup"
+ [go]="go gopls"
+ [python]="python python-pip python-virtualenv ipython python-scapy"
+ [net]="wireshark-qt python-scapy tcpdump nmap iperf3 mtr bind traceroute nftables conntrack-tools ethtool socat openbsd-netcat"
+ [os]="qemu-desktop edk2-ovmf nasm gdb binutils dosfstools mtools e2fsprogs xorriso"
+ [kernel]="base-devel bc cpio pahole libelf flex bison ncurses openssl perl python linux-zen-headers"
+ [containers]="podman distrobox buildah skopeo"
+ [web]="nodejs npm"
+)
+list() { for k in $(printf '%s\n' "${!G[@]}" | sort); do printf '%-11s %s\n' "$k" "${G[$k]}"; done; }
+case "${1:-list}" in
+  list) list ;;
+  show) [ -n "${G[${2:-}]:-}" ] && echo "${G[$2]}" || { echo "unknown group"; exit 1; } ;;
+  install)
+    shift; [ $# -gt 0 ] || { echo "usage: ketchup-devtools install GROUP..."; exit 1; }
+    pk=(); for g in "$@"; do [ -n "${G[$g]:-}" ] || { echo "unknown group: $g"; exit 1; }; read -ra a <<< "${G[$g]}"; pk+=("${a[@]}"); done
+    if [ "$EUID" -eq 0 ]; then pacman -S --needed "${pk[@]}"; else sudo pacman -S --needed "${pk[@]}"; fi
+    [[ " $* " == *" rust "* ]] && echo "Next: rustup default stable" ;;
+  *) sed -n '2,3p' "$0" ;;
+esac

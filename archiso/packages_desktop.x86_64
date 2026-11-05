@@ -1,4 +1,4 @@
-# ===== Ketup package list (slim KDE Plasma + linux-zen + Rust tooling) =====
+# ===== Ketchup package list (slim KDE Plasma + linux-zen + Rust tooling) =====
 # --- base / kernel
 base
 linux-zen
@@ -144,7 +144,7 @@ inxi
 usbutils
 pciutils
 libnotify
-# --- developer + networking/OS-study toolkit (more groups: ketup-devtools)
+# --- developer + networking/OS-study toolkit (more groups: ketchup-devtools)
 base-devel
 gdb
 strace
@@ -168,4 +168,7 @@ socat
 openbsd-netcat
 nftables
 conntrack-tools
-whois
+whois lynis arch-audit
+
+# --- OS visualiser / study tooling (ketchup-lens): python, perf, strace, gdb are above; graphviz for diagrams
+graphviz
