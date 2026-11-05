@@ -168,7 +168,9 @@ socat
 openbsd-netcat
 nftables
 conntrack-tools
-whois lynis arch-audit
+whois
+lynis
+arch-audit
 
 # --- OS visualiser / study tooling (ketchup-lens): python, perf, strace, gdb are above; graphviz for diagrams
 graphviz
