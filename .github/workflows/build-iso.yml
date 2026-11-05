@@ -1,4 +1,4 @@
-name: Build Ketup ISO
+name: Build Ketchup ISO
 
 on:
   push:
@@ -23,13 +23,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: ShellCheck (warnings and errors)
-        run: shellcheck -S warning -s bash ci-build.sh archiso/airootfs/usr/local/bin/ketup-*
+        run: |
+          # ketchup-lens is Python; everything else in ketchup-* is bash
+          shellcheck -S warning -s bash ci-build.sh $(ls archiso/airootfs/usr/local/bin/ketchup-* | grep -v ketchup-lens)
+      - name: Python + simulator tests (ketchup-lens, KetchupVM)
+        run: |
+          python3 -m py_compile archiso/airootfs/usr/local/bin/ketchup-lens tools/make-assets.py
+          node tools/test-kvm.js
       - name: YAML sanity (Calamares configs)
         run: |
           python3 -m pip install --quiet pyyaml
           python3 - <<'PY'
           import glob, yaml
-          files = glob.glob('archiso/airootfs/usr/share/ketup/calamares/**/*.conf', recursive=True) + glob.glob('archiso/airootfs/usr/share/calamares/branding/ketup/branding.desc')
+          files = glob.glob('archiso/airootfs/usr/share/ketchup/calamares/**/*.conf', recursive=True) + glob.glob('archiso/airootfs/usr/share/calamares/branding/ketchup/branding.desc')
           for f in files: yaml.safe_load(open(f))
           print(len(files), 'files OK')
           PY
@@ -70,7 +76,7 @@ jobs:
           size="$(stat -c %s "$iso")"
           echo "ISO: $iso ($size bytes)"
           {
-            echo "Ketup ISO built on ${{ steps.date.outputs.isodate }} from commit \`${GITHUB_SHA::7}\`."
+            echo "Ketchup ISO built on ${{ steps.date.outputs.isodate }} from commit \`${GITHUB_SHA::7}\`."
             echo
             echo "Write it to a USB stick with \`dd\`, Ventoy, balenaEtcher or KDE ISO Image Writer."
             echo "Verify with: \`sha256sum -c $iso.sha256\`"
@@ -99,7 +105,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'nightly' }}
-          name: ${{ startsWith(github.ref, 'refs/tags/v') && format('Ketup {0}', github.ref_name) || format('Ketup nightly {0}', steps.date.outputs.isodate) }}
+          name: ${{ startsWith(github.ref, 'refs/tags/v') && format('Ketchup {0}', github.ref_name) || format('Ketchup nightly {0}', steps.date.outputs.isodate) }}
           prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
           body_path: out/release-notes.md
           files: out/desktop/*
@@ -109,7 +115,7 @@ jobs:
         if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
         with:
-          name: ketup-iso-${{ steps.date.outputs.builddate }}
+          name: ketchup-iso-${{ steps.date.outputs.builddate }}
           path: out/desktop/*
           if-no-files-found: error
           compression-level: 0
