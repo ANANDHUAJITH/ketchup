@@ -15,10 +15,10 @@ strings:
     versionedName:       Ketchup Linux
     shortVersionedName:  Ketchup
     bootloaderEntryName: Ketchup
-    productUrl:          https://github.com/ketchup-os/ketchup
-    supportUrl:          https://github.com/ketchup-os/ketchup/discussions
-    knownIssuesUrl:      https://github.com/ketchup-os/ketchup/issues
-    releaseNotesUrl:     https://github.com/ketchup-os/ketchup/releases
+    productUrl:          https://github.com/ANANDHUAJITH/ketchup
+    supportUrl:          https://github.com/ANANDHUAJITH/ketchup/discussions
+    knownIssuesUrl:      https://github.com/ANANDHUAJITH/ketchup/issues
+    releaseNotesUrl:     https://github.com/ANANDHUAJITH/ketchup/releases
 images:
     productLogo:         "logo.png"
     productIcon:         "icon.png"

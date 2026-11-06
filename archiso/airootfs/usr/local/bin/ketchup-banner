@@ -1,0 +1,28 @@
+#!/bin/bash
+# ketchup-banner - print the Ketchup bottle/wordmark ascii art in color.
+#   ketchup-banner           auto-pick full/compact to fit $COLUMNS
+#   ketchup-banner full      always the big (~98x50) banner
+#   ketchup-banner compact   always the small (~49x25) banner, same art fastfetch uses
+#
+# The art files live in /usr/share/ketchup/branding/ascii/*.txt: a "colors N N N"
+# header (one terminal-256 color number per ${cN} slot used in the file) followed
+# by the art itself, with ${c1}/${c2}/${c3}... switching color as it is read.
+# Regenerate/resize them from tools/make-assets.py's source mark if you want a
+# different size; this script just plays back whatever is in the file.
+set -u
+DIR=/usr/share/ketchup/branding/ascii
+cols="${COLUMNS:-$(tput cols 2>/dev/null || echo 80)}"
+
+pick="${1:-auto}"
+[ "$pick" = auto ] && { [ "$cols" -ge 100 ] && pick=full || pick=compact; }
+f="$DIR/ketchup-$pick.txt"
+[ -f "$f" ] || { echo "ketchup-banner: no such style '$pick' (try: full, compact)" >&2; exit 1; }
+
+read -r _ c1 c2 c3 c4 c5 <<<"$(head -n1 "$f")"
+tail -n +2 "$f" \
+    | sed -e "s/\${c1}/\x1b[38;5;${c1:-7}m/g" \
+          -e "s/\${c2}/\x1b[38;5;${c2:-7}m/g" \
+          -e "s/\${c3}/\x1b[38;5;${c3:-7}m/g" \
+          -e "s/\${c4}/\x1b[38;5;${c4:-7}m/g" \
+          -e "s/\${c5}/\x1b[38;5;${c5:-7}m/g"
+printf '\x1b[0m\n'

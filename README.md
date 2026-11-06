@@ -70,7 +70,7 @@ Find the device: `ketchup-irqfix 27` (device, driver, trigger type, kernel messa
 
 ## Rebranding checklist
 
-Replace the placeholder `ketchup-os/ketchup` URLs in `archiso/airootfs/etc/os-release`, `profiledef.sh` and `archiso/airootfs/usr/share/calamares/branding/ketchup/branding.desc` with your repo.
+The GitHub links in `archiso/airootfs/etc/os-release`, `profiledef.sh` and `archiso/airootfs/usr/share/calamares/branding/ketchup/branding.desc` already point at `github.com/ANANDHUAJITH/ketchup`; update them again if you ever move to an org instead of your personal account.
 Default time zone in the installer is Asia/Kolkata (`archiso/airootfs/usr/share/ketchup/calamares/modules/locale.conf`).
 
 ## Credits & license

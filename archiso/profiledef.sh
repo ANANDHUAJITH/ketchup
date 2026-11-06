@@ -3,7 +3,7 @@
 
 iso_name="ketchup"
 iso_label="KETCHUP_$(date --date="@${SOURCE_DATE_EPOCH:-$(date +%s)}" +%Y%m)"
-iso_publisher="Ketchup <https://github.com/ketchup-os/ketchup>"
+iso_publisher="Ketchup <https://github.com/ANANDHUAJITH/ketchup>"
 iso_application="Ketchup Live/Install Medium"
 iso_version="$(date --date="@${SOURCE_DATE_EPOCH:-$(date +%s)}" +%Y.%m.%d)"
 install_dir="arch"
