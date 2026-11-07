@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=Ketchup
+Description=Ketchup boot splash - animated ASCII cape sequence
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/ketchup
+ScriptFile=/usr/share/plymouth/themes/ketchup/ketchup.script

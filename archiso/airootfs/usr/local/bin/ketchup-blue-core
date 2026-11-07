@@ -16,7 +16,7 @@ ketchup_blue_require() {
     ketchup_blue_is_on || ketchup_blue_die "blue mode isn't on. Run: mythical-blue-ketchup"
 }
 
-# refresh desktop so an icon-theme change shows up immediately (same trick as ketchup-logo)
+# refresh desktop so an icon-theme (and wallpaper) change shows up immediately
 ketchup_blue_refresh() {
     command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -f -t /usr/share/icons/"$1" 2>/dev/null
     command -v kwriteconfig6 >/dev/null && kwriteconfig6 --file kdeglobals --group Icons --key Theme "$1"
@@ -26,13 +26,19 @@ ketchup_blue_refresh() {
     systemctl --user restart plasma-plasmashell.service 2>/dev/null || true
 }
 
+ketchup_blue_wallpaper() {  # $1 = path to image
+    command -v plasma-apply-wallpaperimage >/dev/null && plasma-apply-wallpaperimage "$1" >/dev/null 2>&1
+}
+
 ketchup_blue_enable() {
     mkdir -p "$(dirname "$KETCHUP_BLUE_FLAG")"
     date -Iseconds > "$KETCHUP_BLUE_FLAG"
     ketchup_blue_refresh ketchup-blue
+    ketchup_blue_wallpaper /usr/share/wallpapers/Ketchup-Blue/contents/images/1920x1080.png
 }
 
 ketchup_blue_disable() {
     rm -f "$KETCHUP_BLUE_FLAG"
     ketchup_blue_refresh ketchup
+    ketchup_blue_wallpaper /usr/share/wallpapers/Ketchup/contents/images/1920x1080.png
 }

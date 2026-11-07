@@ -7,7 +7,7 @@
 #   copytoram=n        do not copy the image to RAM (lower idle RAM, faster boot)
 #   noirqdebug         never let the kernel disable a "nobody cared" IRQ (e.g. IRQ 27)
 
-timeout: 8
+timeout: 2
 default_entry: 1
 editor_enabled: yes
 interface_branding: Ketchup Live
@@ -22,7 +22,7 @@ term_background: 40000000
     path: boot():/%INSTALL_DIR%/boot/%ARCH%/vmlinuz-linux-zen
 @MICROCODE@
     module_path: boot():/%INSTALL_DIR%/boot/%ARCH%/initramfs-linux-zen.img
-    cmdline: archisobasedir=%INSTALL_DIR% archisolabel=%ISO_LABEL% cow_spacesize=4G copytoram=n module_blacklist=pcspkr nvme_load=yes noirqdebug quiet loglevel=3
+    cmdline: archisobasedir=%INSTALL_DIR% archisolabel=%ISO_LABEL% cow_spacesize=4G copytoram=n module_blacklist=pcspkr nvme_load=yes noirqdebug quiet splash loglevel=3
 
 /Ketchup safe graphics (nomodeset)
     comment: Use this when the screen stays black or garbled.

@@ -1,25 +1,2 @@
-// Ketchup fastfetch config.
-// Logo is the ketchup bottle + wordmark mascot, pre-rendered as ANSI/ASCII art
-// (tools/make-assets.py does not generate this one - it's hand-converted from
-// the mascot mark). Two sizes ship in /usr/share/ketchup/branding/ascii/:
-//   ketchup-compact.txt  (~49x25) - used here, fits next to the info list
-//   ketchup-full.txt      (~98x50) - bigger banner, also used by `ketchup-banner full`
-// To change size/placement:
-//   - swap "source" for the other file, or your own (same "colors N N N" + ${cN} format)
-//   - "width"/"height" below CAP how much space fastfetch reserves for the logo
-//     (it does not rescale the art itself - for a truly bigger/smaller logo,
-//     regenerate the ascii at a different column count)
-//   - "padding" nudges the logo relative to the system-info columns
-{
-  "logo": {
-    "type": "file",
-    "source": "/usr/share/ketchup/branding/ascii/ketchup-compact.txt",
-    "width": 49,
-    "height": 25,
-    "padding": { "top": 1, "right": 2 },
-    // Overrides the file's built-in colors (bottle red / seed highlight / outline)
-    // with Ketchup's brand palette. Drop this block to use the file's own colors.
-    "color": { "1": "#e63a2e", "2": "#f3e6dc", "3": "#3a0f10" }
-  },
-  "modules": ["title","separator","os","kernel","uptime","packages","shell","de","cpu","gpu","memory","disk"]
-}
+{ "logo": { "type": "file", "source": "/usr/share/ketchup/ascii/ketchup-logo.txt" },
+  "modules": ["title","separator","os","kernel","uptime","packages","shell","de","cpu","gpu","memory","disk"] }

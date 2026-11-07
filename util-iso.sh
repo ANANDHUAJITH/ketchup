@@ -67,7 +67,6 @@ generate_motd() {
 Welcome to [38;2;230;58;46mKetchup[0m - a fast, slim Arch-based system on the linux-zen kernel.
 Run [1mketchup-install[0m to start the installer (or use the desktop icon).
 
-Rebrand name/logo/hostname:    sudo ketchup-rebrand   (logo only: ketchup-logo)
 Learn how the OS works:        ketchup-lens sim   |   ketchup-lens trace -- ./program
 Check security / IRQ trouble:  sudo ketchup-audit   |   ketchup-irqfix 27
 Choose where apps are stored:  ketchup-apps-location

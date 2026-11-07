@@ -1,8 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Change Ketchup Logo
-Comment=Use your own logo for the menu button and branding
-Exec=ketchup-logo
-Icon=ketchup-logo
-Terminal=false
-Categories=Settings;DesktopSettings;

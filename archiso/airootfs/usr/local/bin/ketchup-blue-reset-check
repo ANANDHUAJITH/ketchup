@@ -10,5 +10,8 @@ source /usr/local/bin/ketchup-blue-core
 ketchup_blue_is_on && exit 0   # this session already (re-)entered blue mode on its own
 
 current="$(kreadconfig6 --file kdeglobals --group Icons --key Theme 2>/dev/null)"
-[ "$current" = "ketchup-blue" ] && ketchup_blue_refresh ketchup
+if [ "$current" = "ketchup-blue" ]; then
+    ketchup_blue_refresh ketchup
+    ketchup_blue_wallpaper /usr/share/wallpapers/Ketchup/contents/images/1920x1080.png
+fi
 exit 0
