@@ -1,0 +1,13 @@
+NAME="Ketchup"
+PRETTY_NAME="Ketchup Linux"
+ID=ketchup
+ID_LIKE=arch
+VERSION="26.0"
+VERSION_ID=26.0
+BUILD_ID=rolling
+ANSI_COLOR="38;2;230;58;46"
+HOME_URL="https://github.com/ANANDHUAJITH/ketchup"
+DOCUMENTATION_URL="https://github.com/ANANDHUAJITH/ketchup#readme"
+SUPPORT_URL="https://github.com/ANANDHUAJITH/ketchup/issues"
+BUG_REPORT_URL="https://github.com/ANANDHUAJITH/ketchup/issues"
+LOGO=ketchup-logo

@@ -1,0 +1,47 @@
+#!/bin/bash
+# ketchup-blue-core - shared functions for mythical-blue-ketchup / the-legacy-red-ketchup /
+# ketchup-blue-vault / ketchup-blue-apps / the session-start reset check.
+# Not meant to be run directly: `source` it.
+set -u
+
+# The flag lives in XDG_RUNTIME_DIR (tmpfs, private to the login session), so blue mode
+# ends on logout and on reboot.
+KETCHUP_BLUE_FLAG="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/ketchup-blue-mode"
+
+ketchup_blue_die() { echo "$(basename "$0"): $*" >&2; exit 1; }
+
+ketchup_blue_is_on() { [ -f "$KETCHUP_BLUE_FLAG" ]; }
+
+ketchup_blue_require() {
+    ketchup_blue_is_on || ketchup_blue_die "blue mode isn't on. Run: mythical-blue-ketchup"
+}
+
+# Apply an icon theme change immediately. The theme is tracked in gsettings, which GTK
+# applications and portals read.
+ketchup_blue_refresh() {
+    command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -f -t /usr/share/icons/"$1" 2>/dev/null
+    command -v gsettings >/dev/null && gsettings set org.gnome.desktop.interface icon-theme "$1" 2>/dev/null
+}
+
+# Wallpapers are looked up in /var/lib/ketchup/assets/wallpapers first; that directory
+# is not owned by any package and is kept across upgrades and rollbacks. Noctalia owns
+# the wallpaper layer, so the change goes through its IPC.
+ketchup_blue_wallpaper() {  # $1 = image path; a file of the same name in the asset directory wins
+    local img="$1" custom
+    custom="/var/lib/ketchup/assets/wallpapers/$(basename "$1")"
+    [ -f "$custom" ] && img="$custom"
+    command -v noctalia >/dev/null && noctalia msg wallpaper-set "$img" >/dev/null 2>&1
+}
+
+ketchup_blue_enable() {
+    mkdir -p "$(dirname "$KETCHUP_BLUE_FLAG")"
+    date -Iseconds > "$KETCHUP_BLUE_FLAG"
+    ketchup_blue_refresh ketchup-blue
+    ketchup_blue_wallpaper /usr/share/backgrounds/ketchup/mythical-blue-night.jpg
+}
+
+ketchup_blue_disable() {
+    rm -f "$KETCHUP_BLUE_FLAG"
+    ketchup_blue_refresh ketchup
+    ketchup_blue_wallpaper /usr/share/backgrounds/ketchup/legacy-red-night.jpg
+}

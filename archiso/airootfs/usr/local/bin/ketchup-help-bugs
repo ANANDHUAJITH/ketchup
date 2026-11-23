@@ -1,0 +1,160 @@
+#!/bin/bash
+# ketchup-help-bugs - grab every log this machine has, save it to one .txt,
+# then analyze it for errors/warnings and suggest fixes. Works on the live
+# ISO (pre-install USB) and on an installed baremetal system; it only reads
+# what's available in either case and says what it skipped.
+#
+#   ketchup-help-bugs           full grab: this boot, every previous boot
+#                                journalctl can see, all of /var/log, Xorg/
+#                                niri/noctalia logs, dmesg, ps aux, df, etc.
+#   ketchup-help-bugs --500s    fast mode: last 500 lines per source only,
+#                                timestamped, and prints how long it took
+#   ketchup-help-bugs --open    print the report path then open $PAGER on it
+#
+# Output: ~/ketchup-bug-report-<timestamp>.txt (or /tmp if $HOME isn't
+# writable, e.g. a locked-down live session). Companion to ketchup-doctor
+# (narrower, boot-time specific) and ketchup-audit (security).
+set -u
+FAST=0; OPEN=0
+for a in "$@"; do case "$a" in
+    --500s) FAST=1 ;;
+    --open) OPEN=1 ;;
+    -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
+esac; done
+
+T0=$(date +%s)
+TS="$(date '+%Y%m%d-%H%M%S')"
+if [ -w "${HOME:-/nonexistent}" ] 2>/dev/null; then OUT="$HOME/ketchup-bug-report-$TS.txt"; else OUT="/tmp/ketchup-bug-report-$TS.txt"; fi
+LIVE=0; [ -d /run/archiso ] && LIVE=1
+LINES=200000; [ "$FAST" = 1 ] && LINES=500
+
+sec() { printf '\n========== %s ==========\n' "$1"; }
+grab() { # grab "Section title" command...
+    local title="$1"; shift
+    sec "$title"
+    if command -v "$1" >/dev/null 2>&1; then "$@" 2>&1; else echo "(command not available: $1)"; fi
+}
+
+{
+echo "Ketchup bug report - $(date -u '+%F %T') UTC - mode: $([ "$FAST" = 1 ] && echo '--500s fast' || echo 'full')"
+echo "Medium: $([ "$LIVE" = 1 ] && echo 'LIVE/pre-install USB' || echo 'installed baremetal')"
+uname -a
+cat /proc/cmdline 2>/dev/null
+
+sec "Journal: this boot (errors/warnings prioritized, then tail)"
+journalctl -b -p warning --no-pager -o short-iso 2>/dev/null | tail -n "$LINES"
+sec "Journal: this boot, full tail"
+journalctl -b --no-pager -o short-iso 2>/dev/null | tail -n "$LINES"
+
+if [ "$FAST" = 0 ]; then
+    sec "Journal: every previous boot journalctl knows about"
+    for off in $(journalctl --list-boots --no-pager 2>/dev/null | awk '{print $1}' | grep -v '^0$'); do
+        sec "  boot offset $off"
+        journalctl -b "$off" -p warning --no-pager -o short-iso 2>/dev/null | tail -n 2000
+    done
+else
+    sec "Journal: previous boot (warnings+, last $LINES lines, --500s mode skips older boots)"
+    journalctl -b -1 -p warning --no-pager -o short-iso 2>/dev/null | tail -n "$LINES"
+fi
+
+sec "Kernel ring buffer (dmesg)"
+dmesg --ctime 2>/dev/null | tail -n "$LINES" || dmesg 2>/dev/null | tail -n "$LINES"
+
+sec "Failed systemd units"
+systemctl --failed --no-pager 2>&1
+
+sec "/var/log (anything not journald-only - Xorg, pacman, calamares, etc.)"
+find /var/log -maxdepth 2 -type f \( -iname '*.log' -o -iname '*.log.*' \) 2>/dev/null | while read -r f; do
+    sec "  $f"
+    tail -n "$LINES" "$f" 2>/dev/null
+done
+
+sec "Compositor / shell logs (niri, noctalia) if the user ran them outside systemd"
+for d in "$HOME/.local/state/niri" "$HOME/.cache/niri" "$HOME/.local/state/noctalia" "$HOME/.cache/noctalia"; do
+    [ -d "$d" ] || continue
+    find "$d" -type f \( -iname '*.log' -o -iname '*.txt' \) 2>/dev/null | while read -r f; do
+        sec "  $f"; tail -n "$LINES" "$f" 2>/dev/null
+    done
+done
+command -v niri >/dev/null && { sec "niri msg (validate)"; niri msg validate-config 2>&1; }
+
+grab "ps aux (every process)" ps aux
+grab "Memory"                 free -h
+grab "Disk space"             df -hT
+grab "Mounts"                 findmnt
+grab "Block devices"          lsblk -f
+grab "Network state"          nmcli device status
+grab "PCI devices"            lspci -nnk
+sec "Loaded kernel modules (top 20 by size)"
+lsmod 2>/dev/null | sort -k2 -n -r | head -20
+} > "$OUT" 2>&1
+
+T1=$(date +%s)
+echo "Wrote $OUT ($(wc -l < "$OUT") lines) in $((T1 - T0))s."
+
+# ---------------------------------------------------------------- analysis
+ANALYSIS="${OUT%.txt}-findings.txt"
+{
+echo "Ketchup bug report analysis - $(date -u '+%F %T') UTC"
+echo "Source: $OUT"
+echo
+
+echo "----- Top recurring error/warning lines -----"
+grep -a -iE 'error|fail|warn|critical|fatal|panic|segfault|denied|refused|oom|cannot|unable to|nobody cared' "$OUT" \
+    | sed -E 's/^[A-Za-z]{3} [0-9]+ [0-9:]+ [A-Za-z0-9_-]+ //; s/\[[0-9]+\]//g; s/[0-9]{2,}/N/g' \
+    | sort | uniq -c | sort -rn | head -25
+
+echo
+echo "----- Known patterns found, with suggested fixes -----"
+found_any=0
+check() { # check "pattern" "label" "suggestion"
+    if grep -a -qiE "$1" "$OUT"; then
+        found_any=1
+        printf -- '- %s\n    Fix: %s\n' "$2" "$3"
+    fi
+}
+check 'nobody cared|disabling IRQ' \
+    "an IRQ was disabled because no driver claimed it in time" \
+    "run 'ketchup-irqfix <IRQ number>' to find the owning device; boot entries already carry noirqdebug, see ketchup-doctor."
+check 'out of memory|oom.?kill' \
+    "the OOM killer terminated a process" \
+    "check 'free -h' and 'ps aux --sort=-%mem | head' in this report; consider zram/swap, or close the heavy process."
+check 'Failed to start|failed units' \
+    "one or more systemd units failed to start" \
+    "run 'systemctl --failed' then 'journalctl -xeu <unit>' for the specific unit's own log."
+check 'NetworkManager.*(failed|timed out)|no suitable device found' \
+    "NetworkManager had trouble" \
+    "run 'nmcli device status' and 'nmcli connection up <name>'; check 'rfkill list' if Wi-Fi is blocked."
+check 'noctalia.*(crash|segfault|panic)|wallpaper.*(fail|not found|no such file)' \
+    "Noctalia (wallpaper/shell) had a problem" \
+    "run 'ketchup-verify' - it checks whether the wallpaper paths Noctalia's config points to actually exist."
+check 'niri.*(panic|error)|compositor.*(crash|died)' \
+    "niri itself logged an error" \
+    "run 'niri msg validate-config' and check ~/.config/niri/config.kdl; also see this report's niri/noctalia log section above."
+check 'GPG error|signature.*invalid|could not find a match|database.*corrupt' \
+    "pacman/package database trouble" \
+    "run 'sudo pacman -Syy', and if keys are the issue, 'sudo pacman-key --refresh-keys'."
+check 'nouveau|nvidia.*(fail|error)|amdgpu.*(fail|error)|i915.*(fail|error)' \
+    "a GPU driver logged an error" \
+    "check 'lspci -nnk' (in this report) for the kernel driver in use, and 'dmesg' near the error for the exact failing call."
+check 'Xwayland.*(fail|error)|xwayland-satellite.*(fail|error)' \
+    "Xwayland/X11-compat app support had a problem" \
+    "X11-only apps under niri need xwayland-satellite running; check it's in config.kdl's spawn-at-startup and is actually installed."
+check 'plymouth.*(fail|timed out)' \
+    "plymouth (boot splash) reported a problem" \
+    "usually harmless, but if boot is also slow, check 'systemd-analyze blame' (ketchup-doctor includes it)."
+check 'ext4-fs error|Buffer I/O error|ata[0-9].*error|I/O error' \
+    "a filesystem or disk I/O error was logged" \
+    "treat as a hardware/filesystem warning: run 'sudo smartctl -a /dev/sdX' and back up data; consider 'fsck' from a live session."
+[ "$found_any" = 0 ] && echo "(no high-confidence known pattern matched - see the top recurring lines above and the full report.)"
+} > "$ANALYSIS"
+
+cat "$ANALYSIS"
+echo
+echo "Full report:  $OUT"
+echo "This summary: $ANALYSIS"
+[ "$LIVE" = 1 ] && echo "(Live session: nothing here is saved across a reboot unless you copy these two files off, e.g. onto a USB stick.)"
+
+if [ "$OPEN" = 1 ]; then
+    "${PAGER:-less}" "$ANALYSIS"
+fi

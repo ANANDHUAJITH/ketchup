@@ -1,0 +1,14 @@
+# Dracula (https://draculatheme.com/contribute)
+NAME="Dracula"
+BG="#282a36"
+BG_ALT="#343746"
+BG_DEEP="#21222c"
+FG="#f8f8f2"
+FG_DIM="#b6b8c8"
+ACCENT="#bd93f9"       # purple
+ACCENT_HOVER="#caa8fb"
+ACCENT_PRESSED="#a77ee8"
+ACCENT_FG="#21222c"
+BORDER="#44475a"       # current line
+DISABLED_BG="#343746"
+DISABLED_FG="#6272a4"  # comment

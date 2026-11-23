@@ -1,0 +1,10 @@
+LSB_VERSION=2.0
+DISTRIB_ID=Ketchup
+DISTRIB_RELEASE=rolling
+DISTRIB_DESCRIPTION="Ketchup Linux"
+
+# Packages roll continuously; KETCHUP_VERSION is the release train (26.0, 27.0, ...).
+# Written by ketchup-upgrade, see ketchup-version.
+KETCHUP_VERSION=26.0
+KETCHUP_CODENAME=
+KETCHUP_LAST_UPGRADE=

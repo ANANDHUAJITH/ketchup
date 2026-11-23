@@ -1,0 +1,53 @@
+// Ketchup boot splash: loops the ASCII-cape frame sequence, centered on black.
+Window.SetBackgroundTopColor(0, 0, 0);
+Window.SetBackgroundBottomColor(0, 0, 0);
+
+frame_count = 12;
+frame_images = [];
+for (i = 1; i <= frame_count; i++) {
+    path = "frame" + (i < 10 ? "0" + i : "" + i) + ".png";
+    frame_images[i - 1] = Image(path);
+}
+
+sprite = Sprite();
+sprite.SetZ(10);
+
+fun position_sprite(image) {
+    sprite.SetImage(image);
+    sprite.SetX(Window.GetWidth()  / 2 - image.GetWidth()  / 2);
+    sprite.SetY(Window.GetHeight() / 2 - image.GetHeight() / 2);
+}
+
+position_sprite(frame_images[0]);
+
+// message / progress text under the animation (Plymouth fills in boot progress)
+label = Sprite();
+label.SetZ(10);
+fun refresh_label(duration) {
+    text = Image.Text("Booting Ketchup...", 0.85, 0.2, 0.15, 1, 16);
+    label.SetImage(text);
+    label.SetX(Window.GetWidth() / 2 - text.GetWidth() / 2);
+    label.SetY(Window.GetHeight() / 2 + frame_images[0].GetHeight() / 2 + 20);
+}
+refresh_label();
+
+global.frame_index = 0;
+global.tick_count = 0;
+// ~6 refresh ticks per displayed frame at Plymouth's default callback rate keeps the
+// loop close to the source GIF's ~6.25fps without needing real delta timing.
+ticks_per_frame = 6;
+
+fun refresh_callback() {
+    global.tick_count++;
+    if (global.tick_count >= ticks_per_frame) {
+        global.tick_count = 0;
+        global.frame_index = (global.frame_index + 1) % frame_count;
+        position_sprite(frame_images[global.frame_index]);
+    }
+}
+Plymouth.SetRefreshFunction(refresh_callback);
+
+fun quit_callback() {
+    // no-op: let the default transition play
+}
+Plymouth.SetQuitFunction(quit_callback);

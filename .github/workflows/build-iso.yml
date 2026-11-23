@@ -1,0 +1,144 @@
+name: Build Ketchup ISO
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 3 1 * *'   # monthly rebuild
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write   # needed to publish releases
+
+jobs:
+  lint:
+    name: Lint scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: ShellCheck (warnings and errors)
+        run: |
+          # ketchup-lens is Python; the other commands are shell scripts
+          shellcheck -S warning -s bash ci-build.sh \
+            $(ls archiso/airootfs/usr/local/bin/ketchup-* | grep -v ketchup-lens) \
+            archiso/airootfs/usr/local/bin/mythical-blue-ketchup \
+            archiso/airootfs/usr/local/bin/the-legacy-red-ketchup \
+            archiso/airootfs/usr/local/bin/pkexec-wrapper \
+            archiso/airootfs/usr/lib/ketchup/notify-lib.sh
+      - name: Boot entries
+        run: |
+          # copytoram=y copies the whole image into RAM before boot continues, and the
+          # ConditionNeedsUpdate override avoids rebuilding caches on every live boot.
+          conf=archiso/limine/limine.conf.in
+          if grep -rn 'copytoram=y' archiso/limine archiso/grub archiso/syslinux; then
+            echo "::error::copytoram=y found in a boot entry (use copytoram=n)"; exit 1
+          fi
+          entries=$(grep -c '^ *cmdline:' "$conf")
+          [ "$(grep -c '^ *cmdline:.*copytoram=n' "$conf")" = "$entries" ] || { echo "::error::every Limine entry needs copytoram=n"; exit 1; }
+          [ "$(grep -c '^ *cmdline:.*systemd.condition-needs-update=0' "$conf")" = "$entries" ] || { echo "::error::every Limine entry needs systemd.condition-needs-update=0"; exit 1; }
+      - name: Python + simulator tests (ketchup-lens, KetchupVM)
+        run: |
+          python3 -m py_compile archiso/airootfs/usr/local/bin/ketchup-lens tools/make-assets.py
+          node tools/test-kvm.js
+      - name: YAML sanity (Calamares configs)
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 - <<'PY'
+          import glob, yaml
+          files = glob.glob('archiso/airootfs/usr/share/ketchup/calamares/**/*.conf', recursive=True) + glob.glob('archiso/airootfs/usr/share/calamares/branding/ketchup/branding.desc')
+          for f in files: yaml.safe_load(open(f))
+          print(len(files), 'files OK')
+          PY
+      - name: Required systemd symlinks and unit syntax
+        run: |
+          shellcheck -S warning -s bash tools/ensure-symlinks.sh
+          # Archives and web uploads flatten symlinks; the build recreates them
+          # (util-iso.sh runs tools/ensure-symlinks.sh), so this only warns.
+          tools/ensure-symlinks.sh --check || echo "::warning::Some required systemd symlinks are plain files or missing in this checkout; the build recreates them. To fix the repo itself run tools/ensure-symlinks.sh and commit with symlinks preserved (git config core.symlinks true)."
+
+  build:
+    name: Build ISO
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get build date
+        id: date
+        run: |
+          echo "builddate=$(date +'%y%m%d')" >> "$GITHUB_OUTPUT"
+          echo "isodate=$(date +'%Y.%m.%d')" >> "$GITHUB_OUTPUT"
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          df -h /
+
+      - name: Build ISO in Arch Linux container
+        run: |
+          docker run --rm --privileged \
+            -v "$PWD":/work -w /work \
+            archlinux:base-devel ./ci-build.sh
+          # hand container-created files back to the runner user
+          sudo chown -R "$(id -u):$(id -g)" .
+
+      - name: Prepare release files
+        run: |
+          cd out/desktop
+          ls -lh
+          iso="$(ls ./*.iso | head -n1)"; iso="${iso#./}"
+          size="$(stat -c %s "$iso")"
+          echo "ISO: $iso ($size bytes)"
+          {
+            echo "Ketchup ISO built on ${{ steps.date.outputs.isodate }} from commit \`${GITHUB_SHA::7}\`."
+            echo
+            echo "Write it to a USB stick with \`dd\`, Ventoy, balenaEtcher or KDE ISO Image Writer."
+            echo "Verify with: \`sha256sum -c $iso.sha256\`"
+          } > ../release-notes.md
+          # GitHub release assets are limited to 2 GiB per file: split if needed
+          if [ "$size" -ge 2147483648 ]; then
+            split -b 1900M -d --suffix-length=2 "$iso" "$iso.part"
+            rm "$iso"
+            {
+              echo
+              echo "**This ISO is larger than GitHub's 2 GiB file limit, so it is split in parts.** Download all \`$iso.part*\` files, then join them:"
+              echo
+              echo "    cat $iso.part* > $iso"
+              echo "    sha256sum -c $iso.sha256"
+            } >> ../release-notes.md
+          fi
+
+      - name: Remove previous nightly release
+        if: github.event_name != 'pull_request' && !startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release delete nightly --cleanup-tag --yes --repo "$GITHUB_REPOSITORY" || true
+
+      - name: Publish release (fast download, raw ISO)
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'nightly' }}
+          name: ${{ startsWith(github.ref, 'refs/tags/v') && format('Ketchup {0}', github.ref_name) || format('Ketchup nightly {0}', steps.date.outputs.isodate) }}
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+          body_path: out/release-notes.md
+          files: out/desktop/*
+          fail_on_unmatched_files: true
+
+      - name: Upload ISO artifact (pull requests only)
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ketchup-iso-${{ steps.date.outputs.builddate }}
+          path: out/desktop/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3

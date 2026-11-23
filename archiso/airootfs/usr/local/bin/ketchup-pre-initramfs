@@ -1,0 +1,31 @@
+#!/bin/bash
+# ketchup-pre-initramfs - runs in the target chroot before mkinitcpio: restores the
+# kernels into /boot (the live image empties it) and replaces the archiso presets.
+for d in /usr/lib/modules/*/; do
+    [ -f "${d}pkgbase" ] && [ -f "${d}vmlinuz" ] || continue
+    base="$(cat "${d}pkgbase")"
+    install -Dm644 "${d}vmlinuz" "/boot/vmlinuz-${base}"
+    cat > "/etc/mkinitcpio.d/${base}.preset" <<EOF
+ALL_config="/etc/mkinitcpio.conf"
+ALL_kver="/boot/vmlinuz-${base}"
+PRESETS=('default' 'fallback')
+default_image="/boot/initramfs-${base}.img"
+fallback_image="/boot/initramfs-${base}-fallback.img"
+fallback_options="-S autodetect"
+EOF
+done
+rm -f /etc/mkinitcpio.conf.d/archiso.conf
+# GRUB defaults for the BIOS fallback path (ketchup-limine installs GRUB only when Limine
+# cannot be used). Keep the options in sync with DEFAULT_EXTRA in ketchup-limine.
+if [ -f /etc/default/grub ]; then
+    sed -i 's|^GRUB_DISTRIBUTOR=.*|GRUB_DISTRIBUTOR="Ketchup"|' /etc/default/grub
+    sed -i 's|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT="quiet splash loglevel=3 vt.global_cursor_default=0 nowatchdog zswap.enabled=0 noirqdebug"|' /etc/default/grub
+    grep -q '^GRUB_DISABLE_OS_PROBER' /etc/default/grub \
+        && sed -i 's|^#\?GRUB_DISABLE_OS_PROBER=.*|GRUB_DISABLE_OS_PROBER=false|' /etc/default/grub \
+        || echo 'GRUB_DISABLE_OS_PROBER=false' >> /etc/default/grub
+    # Plymouth needs the graphical framebuffer kept through the handoff.
+    grep -q '^GRUB_GFXPAYLOAD_LINUX' /etc/default/grub \
+        && sed -i 's|^GRUB_GFXPAYLOAD_LINUX=.*|GRUB_GFXPAYLOAD_LINUX=keep|' /etc/default/grub \
+        || echo 'GRUB_GFXPAYLOAD_LINUX=keep' >> /etc/default/grub
+fi
+exit 0

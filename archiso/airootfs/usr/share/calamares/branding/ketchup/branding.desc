@@ -1,0 +1,32 @@
+---
+componentName: ketchup
+welcomeStyleCalamares: false
+welcomeExpandingLogo: true
+windowExpanding: normal
+windowSize: 900px,560px
+windowPlacement: center
+sidebar: widget
+navigation: widget
+strings:
+    productName:         Ketchup
+    shortProductName:    Ketchup
+    version:             rolling
+    shortVersion:        rolling
+    versionedName:       Ketchup Linux
+    shortVersionedName:  Ketchup
+    bootloaderEntryName: Ketchup
+    productUrl:          https://github.com/ANANDHUAJITH/ketchup
+    supportUrl:          https://github.com/ANANDHUAJITH/ketchup/issues
+    knownIssuesUrl:      https://github.com/ANANDHUAJITH/ketchup/issues
+    releaseNotesUrl:     https://github.com/ANANDHUAJITH/ketchup/releases
+images:
+    productLogo:         "logo.png"
+    productIcon:         "icon.png"
+    productWelcome:      "welcome.png"
+slideshow:               "show.qml"
+slideshowAPI: 2
+style:
+    SidebarBackground:        "#0f131a"
+    SidebarText:              "#8a8f98"
+    SidebarTextCurrent:       "#0b0e14"
+    SidebarBackgroundCurrent: "#e6b450"

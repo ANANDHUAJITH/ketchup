@@ -1,0 +1,47 @@
+#!/bin/bash
+# ketchup-boot-guard - roll back automatically when a freshly applied ketchup-upgrade
+# does not boot cleanly.
+#
+#   ketchup-boot-guard pre    early at boot: count this attempt; after MAX_ATTEMPTS boots
+#                             without a successful login, restore the previous system
+#                             and reboot
+#   ketchup-boot-guard post   once graphical.target is reached: the update is confirmed
+#                             good, clear the attempt counter
+#
+# Does nothing unless /etc/ketchup/previous-root marks the running system as an
+# update that has not been confirmed yet.
+set -u
+PREV_STATE=/etc/ketchup/previous-root
+COUNT_FILE=/etc/ketchup/boot-attempts
+MAX_ATTEMPTS=3
+
+[ -f "$PREV_STATE" ] || exit 0
+
+case "${1:-}" in
+pre)
+    n=0; [ -f "$COUNT_FILE" ] && n="$(cat "$COUNT_FILE" 2>/dev/null)"
+    n=$(( ${n:-0} + 1 ))
+    echo "$n" > "$COUNT_FILE"
+    logger -t ketchup-boot-guard "boot attempt $n/$MAX_ATTEMPTS on a freshly-applied update"
+    if [ "$n" -ge "$MAX_ATTEMPTS" ]; then
+        logger -t ketchup-boot-guard "never reached a successful login after $MAX_ATTEMPTS attempts - rolling back automatically"
+        # shellcheck source=/dev/null
+        . "$PREV_STATE"
+        cur_subvol="$(findmnt -no OPTIONS / | tr ',' '\n' | sed -n 's/^subvol=\///p')"
+        if [ -n "${PREV_KERNEL_DIR:-}" ] && [ -d "$PREV_KERNEL_DIR" ]; then
+            cp -a "$PREV_KERNEL_DIR"/vmlinuz-* "$PREV_KERNEL_DIR"/initramfs-*.img /boot/ 2>/dev/null
+        fi
+        # Only the next boot's menu is affected, not the mounted root.
+        if [ -n "${PREV_SUBVOL:-}" ] && [ -n "$cur_subvol" ] && [ -f /etc/kernel/cmdline ]; then
+            sed -i "s#rootflags=subvol=${cur_subvol}#rootflags=subvol=${PREV_SUBVOL}#" /etc/kernel/cmdline
+        fi
+        rm -f "$PREV_STATE" "$COUNT_FILE"
+        /usr/local/bin/ketchup-limine update 2>/dev/null
+        systemctl reboot
+    fi
+    ;;
+post)
+    rm -f "$COUNT_FILE"
+    logger -t ketchup-boot-guard "graphical session reached, update confirmed"
+    ;;
+esac

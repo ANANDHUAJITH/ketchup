@@ -1,0 +1,498 @@
+#!/usr/bin/env python3
+"""ketchup-lens - see what the OS, kernel, CPU, RAM, caches and disk do when a program runs.
+
+  ketchup-lens trace [-o DIR] [--no-open] [--timeout S] [--latency] [--skip LIST] -- CMD [ARGS...]
+        run CMD (several times, once per probe), collect REAL data and write an interactive HTML report
+        probes: strace (system calls)  perf (CPU counters)  gdb (registers + memory map snapshots)
+                /proc sampler (RSS, page faults, I/O over time)       --skip strace,perf,gdb,proc
+  ketchup-lens sim               open the interactive CPU/MMU/cache/kernel simulator (toy machine, step by step)
+  ketchup-lens latency           measure memory latency: L1 / L2 / L3 / RAM plateaus on THIS machine
+  ketchup-lens hw                print the hardware map (CPU, caches, RAM, disks) from /sys and /proc
+  ketchup-lens samples           write + compile small example programs to ~/ketchup-labs/lens
+
+Your program is executed several times (once per probe). Do not trace programs with side effects
+(deleting files, sending mail...). Notes: /usr/share/doc/ketchup/STUDY.md  (Track 3).
+"""
+import argparse, json, os, re, shutil, subprocess, sys, tempfile, threading, time
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+SHARE = next((p for p in (Path(os.environ.get("KETCHUP_SHARE", "/nonexistent")),
+                          Path("/usr/share/ketchup"),
+                          HERE.parent.parent / "share" / "ketchup") if (p / "lens").is_dir()), None)
+
+CATS = {
+    "process": "execve execveat clone clone3 fork vfork wait4 waitid exit exit_group kill tgkill tkill getpid gettid getppid "
+               "set_tid_address set_robust_list rseq prctl arch_prctl sched_yield sched_getaffinity sched_setaffinity setsid setpgid".split(),
+    "memory": "mmap munmap mprotect brk mremap madvise mlock munlock msync mincore membarrier".split(),
+    "file": "open openat openat2 close read write pread64 pwrite64 readv writev lseek stat fstat lstat newfstatat statx access "
+            "faccessat faccessat2 getdents getdents64 readlink readlinkat ioctl fcntl dup dup2 dup3 pipe pipe2 unlink unlinkat "
+            "rename renameat mkdir mkdirat rmdir fsync fdatasync ftruncate truncate getcwd chdir sendfile copy_file_range statfs fstatfs".split(),
+    "network": "socket connect accept accept4 bind listen sendto recvfrom sendmsg recvmsg shutdown getsockopt setsockopt "
+               "getsockname getpeername socketpair".split(),
+    "signal": "rt_sigaction rt_sigprocmask rt_sigreturn sigaltstack signalfd4".split(),
+    "time/sync": "futex nanosleep clock_nanosleep clock_gettime gettimeofday poll ppoll select pselect6 epoll_wait epoll_pwait "
+                 "epoll_ctl epoll_create1 eventfd2 timerfd_create timerfd_settime".split(),
+    "identity": "getuid geteuid getgid getegid uname getrandom prlimit64 getrlimit sysinfo".split(),
+}
+CAT_OF = {n: c for c, ns in CATS.items() for n in ns}
+
+PERF_HW = ["cycles", "instructions", "cache-references", "cache-misses", "branches", "branch-misses"]
+PERF_SW = ["task-clock", "page-faults", "context-switches", "cpu-migrations"]
+
+
+def have(tool): return shutil.which(tool) is not None
+def log(*a): print("ketchup-lens:", *a, file=sys.stderr)
+def rd(path, default=""):
+    try: return Path(path).read_text()
+    except OSError: return default
+
+
+# ------------------------------------------------------------------ hardware
+def hardware():
+    cpuinfo = rd("/proc/cpuinfo")
+    model = (re.search(r"model name\s*:\s*(.+)", cpuinfo) or [None, "unknown CPU"])[1]
+    threads = len(re.findall(r"^processor\s*:", cpuinfo, re.M)) or os.cpu_count() or 1
+    cores = len({(m.group(1), m2.group(1)) for m, m2 in zip(
+        re.finditer(r"physical id\s*:\s*(\d+)", cpuinfo), re.finditer(r"core id\s*:\s*(\d+)", cpuinfo))}) or threads
+    mhz = (re.search(r"cpu MHz\s*:\s*([\d.]+)", cpuinfo) or [None, "0"])[1]
+    flags = (re.search(r"^flags\s*:\s*(.+)$", cpuinfo, re.M) or [None, ""])[1].split()
+    interesting = [f for f in ("sse2", "avx", "avx2", "avx512f", "aes", "sha_ni", "vmx", "svm", "smep", "smap", "pti", "nx", "hypervisor") if f in flags]
+    caches = []
+    base = Path("/sys/devices/system/cpu/cpu0/cache")
+    if base.is_dir():
+        for idx in sorted(base.glob("index*")):
+            g = lambda k: rd(idx / k).strip()
+            caches.append({"level": g("level"), "type": g("type"), "size": g("size"), "ways": g("ways_of_associativity"),
+                           "line": g("coherency_line_size"), "sets": g("number_of_sets"), "shared": g("shared_cpu_list")})
+    mem = {}
+    for line in rd("/proc/meminfo").splitlines():
+        k, _, v = line.partition(":")
+        if k in ("MemTotal", "MemAvailable", "Cached", "Buffers", "SwapTotal", "Dirty", "AnonPages", "Mapped"):
+            mem[k] = int(v.split()[0])
+    disks = []
+    if have("lsblk"):
+        try:
+            out = subprocess.run(["lsblk", "-J", "-d", "-o", "NAME,SIZE,TYPE,ROTA,MODEL,TRAN"], capture_output=True, text=True, timeout=5).stdout
+            disks = [d for d in json.loads(out).get("blockdevices", []) if d.get("type") in ("disk", "rom")]
+        except Exception: pass
+    return {"cpu": {"model": model.strip(), "cores": cores, "threads": threads, "mhz": float(mhz), "flags": interesting},
+            "caches": caches, "mem": mem, "page_size": os.sysconf("SC_PAGE_SIZE"), "disks": disks,
+            "kernel": os.uname().release, "arch": os.uname().machine,
+            "hypervisor": "hypervisor" in flags, "aslr": rd("/proc/sys/kernel/randomize_va_space").strip()}
+
+
+def print_hw():
+    h = hardware(); c = h["cpu"]
+    print(f"CPU     {c['model']}  ({c['cores']} cores / {c['threads']} threads, {c['mhz']:.0f} MHz)")
+    print(f"        features: {' '.join(c['flags'])}")
+    for ca in h["caches"]:
+        print(f"  L{ca['level']} {ca['type']:<12} {ca['size']:>7}  {ca['ways']}-way  line {ca['line']} B  shared by cpu {ca['shared']}")
+    m = h["mem"]
+    print(f"RAM     {m.get('MemTotal', 0)//1024} MiB total, {m.get('MemAvailable', 0)//1024} MiB available, page size {h['page_size']} B")
+    for d in h["disks"]:
+        print(f"DISK    /dev/{d['name']}  {d['size']}  {'HDD' if d.get('rota') in (True, '1', 1) else 'SSD/flash'}  {d.get('model') or ''}")
+    print(f"KERNEL  {h['kernel']} ({h['arch']}), ASLR={h['aslr']}{'  [running in a VM: hardware counters may be unavailable]' if h['hypervisor'] else ''}")
+
+
+# ------------------------------------------------------------------ strace
+STRACE_RE = re.compile(r"^(?:(\d+)\s+)?(\d+\.\d+)\s+(.*?)\s+<(\d+\.\d+)>$")
+CALL_RE = re.compile(r"^(\w+)\((.*)\)\s+=\s+(.*)$")
+
+
+def run_strace(cmd, timeout):
+    if not have("strace"): return None, "strace not installed"
+    out = tempfile.NamedTemporaryFile(prefix="lens-strace-", delete=False).name
+    t0 = time.time()
+    try:
+        p = subprocess.run(["strace", "-f", "-ttt", "-T", "-yy", "-s", "48", "-o", out, "--"] + cmd,
+                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout)
+        rc = p.returncode
+    except subprocess.TimeoutExpired:
+        rc = None
+    wall = time.time() - t0
+    calls, pending = [], {}
+    first_t = None
+    for raw in rd(out).splitlines():
+        m = STRACE_RE.match(raw)
+        if m: pid, t, body, dur = m.group(1) or "0", float(m.group(2)), m.group(3), float(m.group(4))
+        else:
+            m2 = re.match(r"^(?:(\d+)\s+)?(\d+\.\d+)\s+(.*)$", raw)
+            if not m2: continue
+            pid, t, body, dur = m2.group(1) or "0", float(m2.group(2)), m2.group(3), 0.0
+        if first_t is None: first_t = t
+        if "<unfinished ...>" in body:
+            pending[pid] = (t, body.split("(")[0]); continue
+        if body.startswith("<... "):
+            nm = body[5:].split()[0]
+            t0p, _ = pending.pop(pid, (t, nm))
+            mm = re.match(r"<\.\.\. \w+ resumed>(.*)\)\s+=\s+(.*)$", body)
+            if mm: calls.append((pid, t0p, nm, "(resumed)" + mm.group(1).strip(), mm.group(2), dur))
+            continue
+        if body.startswith("+++") or body.startswith("---"):
+            if "exited" in body or "killed" in body: calls.append((pid, t, "<exit>", body.strip("+ "), "", 0.0))
+            continue
+        c = CALL_RE.match(body)
+        if c: calls.append((pid, t, c.group(1), c.group(2), c.group(3), dur))
+    if first_t is None: return None, "strace produced no output"
+    res = []
+    for i, (pid, t, name, args, ret, dur) in enumerate(calls):
+        res.append({"i": i, "pid": int(pid), "t": round(t - first_t, 6), "name": name, "args": args[:200], "ret": ret[:80],
+                    "dur": round(dur, 6), "cat": CAT_OF.get(name, "other"), "err": ret.startswith("-1 ")})
+    try: os.unlink(out)
+    except OSError: pass
+    return {"calls": res, "rc": rc, "wall": wall}, None
+
+
+def analyse_calls(calls):
+    by_name, by_cat = {}, {}
+    for c in calls:
+        n = by_name.setdefault(c["name"], {"n": 0, "time": 0.0, "errors": 0}); n["n"] += 1; n["time"] += c["dur"]; n["errors"] += c["err"]
+        k = by_cat.setdefault(c["cat"], {"n": 0, "time": 0.0}); k["n"] += 1; k["time"] += c["dur"]
+    return {"by_name": by_name, "by_cat": by_cat}
+
+
+LOADER_NOISE = set("close read pread64 fstat newfstatat statx mmap mprotect munmap arch_prctl set_tid_address set_robust_list rseq "
+                   "prlimit64 getrandom brk openat access lseek".split())
+
+
+def derive_story(calls):
+    """Heuristic phases + markers from the syscall list (labelled approximate in the report)."""
+    if not calls: return [], []
+    main_pid = calls[0]["pid"]
+    ex = next((c for c in calls if c["name"] == "execve"), calls[0])
+    end = calls[-1]["t"] + calls[-1]["dur"]
+    libs = [c for c in calls if c["name"] in ("openat", "open") and re.search(r"\.so(\.|\"|$)|ld\.so\.cache", c["args"]) and c["pid"] == main_pid]
+    markers = [{"t": ex["t"], "label": "execve(): kernel replaces the process image", "kind": "kernel"}]
+    t_libs_end = ex["t"]
+    if libs:
+        t_libs_end = libs[-1]["t"]
+        after = [c for c in calls if c["t"] > t_libs_end and c["pid"] == main_pid]
+        main_start = next((c for c in after if not (c["name"] in LOADER_NOISE)), after[0] if after else libs[-1])
+        t_libs_end = main_start["t"] if main_start else t_libs_end
+        for c in libs:
+            m = re.search(r'"([^"]+)"', c["args"])
+            markers.append({"t": c["t"], "label": "map " + (os.path.basename(m.group(1)) if m else "library"), "kind": "loader"})
+    fw = next((c for c in calls if c["name"] == "write" and re.match(r"^[12]", c["args"])), None)
+    if fw: markers.append({"t": fw["t"], "label": "first output: write() to the terminal", "kind": "io"})
+    for c in calls:
+        if c["name"] in ("clone", "clone3", "fork", "vfork") and not c["err"]:
+            markers.append({"t": c["t"], "label": f"{c['name']}(): new process/thread", "kind": "process"})
+    ex2 = [c for c in calls if c["name"] == "execve"][1:4]
+    for c in ex2: markers.append({"t": c["t"], "label": "execve(): " + (re.search(r'"([^"]+)"', c["args"]) or [0, "?"])[1], "kind": "kernel"})
+    eg = next((c for c in reversed(calls) if c["name"] in ("exit_group", "exit")), None)
+    t_exit = eg["t"] if eg else end
+    markers.append({"t": t_exit, "label": "exit_group(): process ends, kernel frees its memory", "kind": "kernel"})
+    phases = [{"name": "kernel: exec + load ELF", "t0": 0, "t1": ex["t"] + 0.0005, "kind": "kernel",
+               "desc": "The kernel opens the file, checks the ELF header, maps its segments, builds a fresh stack and jumps to the entry point."}]
+    if libs:
+        phases.append({"name": "dynamic loader (ld.so)", "t0": ex["t"] + 0.0005, "t1": t_libs_end, "kind": "loader",
+                       "desc": "User-space ld.so finds shared libraries (ld.so.cache), mmap()s them, applies relocations, then calls libc init."})
+    phases.append({"name": "your program runs", "t0": t_libs_end if libs else ex["t"] + 0.0005, "t1": t_exit, "kind": "user",
+                   "desc": "Code runs in user mode; every system call crosses into kernel mode and back."})
+    phases.append({"name": "exit + teardown", "t0": t_exit, "t1": max(end, t_exit + 1e-4), "kind": "kernel",
+                   "desc": "The kernel closes file descriptors, frees page tables and RAM, and tells the parent via SIGCHLD/wait4."})
+    return phases, markers
+
+
+# ------------------------------------------------------------------ perf
+def run_perf(cmd, timeout):
+    if not have("perf"): return None, "perf not installed (package 'perf')"
+    for events, label in ((PERF_HW + PERF_SW, "hardware+software"), (PERF_SW, "software only")):
+        out = tempfile.NamedTemporaryFile(prefix="lens-perf-", delete=False).name
+        try:
+            subprocess.run(["perf", "stat", "-x", ",", "-o", out, "-e", ",".join(events), "--"] + cmd,
+                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return None, "perf timed out"
+        vals = {}
+        for line in rd(out).splitlines():
+            f = line.split(",")
+            if len(f) >= 3 and f[2]:
+                ev = f[2].split(":")[0]
+                try: vals[ev] = float(f[0])
+                except ValueError: vals[ev] = None
+        os.unlink(out)
+        if any(v for v in vals.values()):
+            d = {}
+            if vals.get("cycles") and vals.get("instructions"): d["ipc"] = vals["instructions"] / vals["cycles"]
+            if vals.get("cache-references") and vals.get("cache-misses") is not None: d["cache_miss_rate"] = vals["cache-misses"] / vals["cache-references"]
+            if vals.get("branches") and vals.get("branch-misses") is not None: d["branch_miss_rate"] = vals["branch-misses"] / vals["branches"]
+            note = "" if label.startswith("hardware") and vals.get("cycles") else \
+                "Hardware counters are not available here (common inside virtual machines or with restrictive perf_event_paranoid); only software events are shown."
+            return {"events": vals, "derived": d, "note": note}, None
+    return None, "perf could not read counters (try: sudo sysctl kernel.perf_event_paranoid=1)"
+
+
+# ------------------------------------------------------------------ /proc sampler
+def run_sampler(cmd, timeout, interval=0.004):
+    samples = []
+    t0 = time.time()
+    try:
+        p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError as e:
+        return None, f"cannot start: {e}"
+    ticks = os.sysconf("SC_CLK_TCK")
+    while p.poll() is None and time.time() - t0 < timeout:
+        try:
+            st = rd(f"/proc/{p.pid}/status"); stat = rd(f"/proc/{p.pid}/stat"); io = rd(f"/proc/{p.pid}/io")
+            if not st: break
+            g = lambda key, txt=st: int((re.search(rf"^{key}:\s+(\d+)", txt, re.M) or [0, 0])[1])
+            f = stat[stat.rfind(")") + 2:].split()          # fields after "(comm)"
+            samples.append({"t": round(time.time() - t0, 4), "rss": g("VmRSS"), "vsz": g("VmSize"), "data": g("VmData"),
+                            "minflt": int(f[7]), "majflt": int(f[9]), "utime": int(f[11]) / ticks, "stime": int(f[12]) / ticks,
+                            "vol": g("voluntary_ctxt_switches"), "invol": g("nonvoluntary_ctxt_switches"),
+                            "rchar": g("rchar", io), "wchar": g("wchar", io), "rbytes": g("read_bytes", io), "wbytes": g("write_bytes", io),
+                            "cpu": int(f[36]), "threads": g("Threads"), "state": f[0]})
+        except (OSError, IndexError, ValueError):
+            pass
+        time.sleep(interval)
+    if p.poll() is None: p.kill()
+    p.wait()
+    return {"samples": samples, "wall": time.time() - t0}, None if samples else "program ended before the first sample (it is too short for sampling; the other probes still work)"
+
+
+# ------------------------------------------------------------------ gdb snapshots
+GDB_SCRIPT = """set pagination off
+set confirm off
+set $w = 0
+set $x = 0
+starti > /dev/null
+echo ##SNAP entry\\n
+info registers
+info proc mappings
+catch syscall write
+commands
+silent
+if $w == 0
+set $w = 1
+echo ##SNAP first-write\\n
+info registers
+info proc mappings
+end
+continue
+end
+catch syscall exit_group
+commands
+silent
+echo ##SNAP exit_group\\n
+info registers
+info proc mappings
+set $x = 1
+continue
+end
+continue
+quit
+"""
+SNAP_INFO = {
+    "entry": ("Process just created (starti)", "Right after execve(): the CPU is about to run the very first instruction. Only the binary and the dynamic loader are mapped; libc is not loaded yet."),
+    "first-write": ("First write() system call", "Registers hold the syscall arguments (rax = syscall number 1, rdi = fd, rsi = buffer, rdx = length). The address space now has libc, heap and a populated stack."),
+    "exit_group": ("exit_group() system call", "The program is leaving. This is the fullest picture of the address space; right after this the kernel tears it all down."),
+}
+EFLAGS = {"CF": "carry", "PF": "parity", "AF": "adjust", "ZF": "zero", "SF": "sign", "TF": "trap (single-step)", "IF": "interrupts enabled",
+          "DF": "direction", "OF": "overflow"}
+
+
+def parse_gdb(text):
+    snaps = []
+    for chunk in re.split(r"##SNAP ", text)[1:]:
+        label, _, body = chunk.partition("\n")
+        label = label.strip()
+        regs, maps = {}, []
+        for line in body.splitlines():
+            m = re.match(r"^(r[a-z0-9]+|eflags|[cdefgs]s|fs_base|gs_base|k[0-7])\s+(0x[0-9a-f]+)\s*(.*)$", line)
+            if m: regs[m.group(1)] = {"hex": m.group(2), "note": m.group(3).strip()}; continue
+            m = re.match(r"^\s*(0x[0-9a-f]+)\s+(0x[0-9a-f]+)\s+(0x[0-9a-f]+)\s+(0x[0-9a-f]+)\s+(?:([rwxsp-]{4})\s+)?(.*)$", line)
+            if m:
+                maps.append({"start": int(m.group(1), 16), "end": int(m.group(2), 16), "size": int(m.group(3), 16),
+                             "off": int(m.group(4), 16), "perm": m.group(5) or "", "obj": m.group(6).strip()})
+        if regs or maps:
+            title, why = SNAP_INFO.get(label, (label, ""))
+            fl = regs.get("eflags", {}).get("note", "")
+            set_flags = [{"f": f, "meaning": EFLAGS.get(f, "")} for f in re.findall(r"\b([A-Z]{2})\b", fl)]
+            snaps.append({"label": label, "title": title, "why": why, "regs": regs, "maps": maps, "flags": set_flags})
+    return snaps
+
+
+def run_gdb(cmd, timeout):
+    if not have("gdb"): return None, "gdb not installed"
+    with tempfile.NamedTemporaryFile("w", suffix=".gdb", delete=False) as f: f.write(GDB_SCRIPT); script = f.name
+    try:
+        p = subprocess.run(["gdb", "-q", "-nx", "-batch", "-x", script, "--args"] + cmd, stdin=subprocess.DEVNULL,
+                           capture_output=True, text=True, timeout=timeout)
+        snaps = parse_gdb(p.stdout)
+    except subprocess.TimeoutExpired:
+        return None, "gdb timed out"
+    finally:
+        os.unlink(script)
+    return (snaps, None) if snaps else (None, "gdb gave no snapshots (ptrace may be blocked: check /proc/sys/kernel/yama/ptrace_scope)")
+
+
+# ------------------------------------------------------------------ latency benchmark (C, compiled on the fly)
+LAT_C = r"""
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <stdint.h>
+static double now(void){struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return t.tv_sec*1e9+t.tv_nsec;}
+int main(void){
+  for (size_t kb = 4; kb <= 131072; kb *= 2) {
+    size_t n = kb*1024/64;                       /* one pointer per 64-byte cache line */
+    char *buf = aligned_alloc(64, n*64);
+    size_t *idx = malloc(n*sizeof *idx);
+    for (size_t i=0;i<n;i++) idx[i]=i;
+    srand(1); for (size_t i=n-1;i>0;i--){size_t j=rand()%(i+1);size_t t=idx[i];idx[i]=idx[j];idx[j]=t;}
+    for (size_t i=0;i<n;i++) *(void**)(buf+idx[i]*64) = buf+idx[(i+1)%n]*64;   /* random cycle: defeats prefetch */
+    void *p = buf+idx[0]*64; size_t steps = 20000000;
+    for (size_t i=0;i<n && i<steps;i++) p=*(void**)p;      /* warm up */
+    double t0=now(); for (size_t i=0;i<steps;i++) p=*(void**)p; double t1=now();
+    printf("%zu %.3f %p\n", kb*1024, (t1-t0)/steps, p);
+    free(buf); free(idx);
+  }
+  return 0;
+}
+"""
+
+
+def run_latency():
+    if not have("gcc"): return None, "gcc not installed (package base-devel)"
+    d = tempfile.mkdtemp(prefix="lens-lat-")
+    src, exe = os.path.join(d, "lat.c"), os.path.join(d, "lat")
+    Path(src).write_text(LAT_C)
+    r = subprocess.run(["gcc", "-O2", "-o", exe, src], capture_output=True, text=True)
+    if r.returncode: return None, "compile failed: " + r.stderr[:200]
+    log("measuring memory latency (about 10-30 seconds)...")
+    out = subprocess.run([exe], capture_output=True, text=True, timeout=180).stdout
+    pts = [{"bytes": int(a), "ns": float(b)} for a, b, _ in (l.split() for l in out.splitlines() if l.strip())]
+    shutil.rmtree(d, ignore_errors=True)
+    return {"points": pts}, None
+
+
+# ------------------------------------------------------------------ report
+def build_report(cmd, outdir, args):
+    skip = set(filter(None, (args.skip or "").split(",")))
+    data = {"meta": {"cmd": cmd, "when": time.strftime("%Y-%m-%d %H:%M:%S"), "host": os.uname().nodename, "user": os.environ.get("USER", "")},
+            "hw": hardware(), "warnings": [], "calls": [], "stats": {}, "phases": [], "markers": [], "perf": None, "samples": [],
+            "snaps": [], "latency": None, "wall": None, "rc": None}
+    if "strace" not in skip:
+        log("probe 1/4: strace (system calls)"); r, err = run_strace(cmd, args.timeout)
+        if r:
+            data["calls"], data["rc"], data["wall"] = r["calls"], r["rc"], r["wall"]
+            data["stats"] = analyse_calls(r["calls"]); data["phases"], data["markers"] = derive_story(r["calls"])
+        else: data["warnings"].append("strace: " + err)
+    if "perf" not in skip:
+        log("probe 2/4: perf stat (CPU counters)"); r, err = run_perf(cmd, args.timeout)
+        if r: data["perf"] = r
+        else: data["warnings"].append("perf: " + err)
+    if "gdb" not in skip:
+        log("probe 3/4: gdb (registers + memory map snapshots)"); r, err = run_gdb(cmd, args.timeout)
+        if r: data["snaps"] = r
+        else: data["warnings"].append("gdb: " + err)
+    if "proc" not in skip:
+        log("probe 4/4: /proc sampler (RSS, faults, I/O over time)"); r, err = run_sampler(cmd, args.timeout)
+        if r: data["samples"] = r["samples"]; data["wall"] = data["wall"] or r["wall"]
+        if err: data["warnings"].append("sampler: " + err)
+    if args.latency or Path(os.path.expanduser("~/.cache/ketchup-lens/latency.json")).exists():
+        cache = Path(os.path.expanduser("~/.cache/ketchup-lens/latency.json"))
+        if args.latency:
+            r, err = run_latency()
+            if r: cache.parent.mkdir(parents=True, exist_ok=True); cache.write_text(json.dumps(r))
+            else: data["warnings"].append("latency: " + err)
+        if cache.exists(): data["latency"] = json.loads(cache.read_text())
+    if SHARE is None: sys.exit("ketchup-lens: cannot find the report template (/usr/share/ketchup/lens)")
+    tpl = (SHARE / "lens" / "report.html").read_text()
+    payload = json.dumps(data).replace("</", "<\\/")
+    html = tpl.replace("/*__DATA__*/null", payload)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    outdir = Path(outdir or os.path.expanduser("~/ketchup-lens")); outdir.mkdir(parents=True, exist_ok=True)
+    name = re.sub(r"[^A-Za-z0-9._-]", "_", os.path.basename(cmd[0]))
+    path = outdir / f"{name}-{stamp}.html"
+    path.write_text(html)
+    return path, data
+
+
+def open_in_browser(path):
+    for opener in (["xdg-open"], ["firefox"]):
+        if have(opener[0]) and (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+            subprocess.Popen(opener + [str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); return True
+    return False
+
+
+SAMPLES = {
+"hello.c": r'''/* The smallest interesting program. Trace it: ketchup-lens trace -- ./hello  (look at write() and exit_group) */
+#include <stdio.h>
+int main(void){ puts("hello from user space"); return 0; }''',
+"touch_pages.c": r'''/* Page faults: malloc gives address SPACE, the kernel gives RAM only when a page is first touched.
+   Watch minor faults climb in the Memory tab: ketchup-lens trace -- ./touch_pages 200 */
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+int main(int argc,char**argv){
+  size_t mb = argc>1 ? atoi(argv[1]) : 100, n = mb<<20; char *p = malloc(n);
+  for (size_t i=0;i<n;i+=4096){ p[i]=1; if ((i>>20)%20==0 && i%(1<<20)==0) usleep(2000); }
+  printf("touched %zu MiB\n", mb); return 0; }''',
+"readfile.c": r'''/* Disk + page cache: the first run reads from the disk, the second from RAM (page cache).
+   Run it twice and compare the Disk tab:  ketchup-lens trace -- ./readfile /usr/lib/libc.so.6 */
+#include <stdio.h>
+#include <fcntl.h>
+#include <unistd.h>
+int main(int argc,char**argv){ static char b[65536]; long t=0; ssize_t r; int fd=open(argc>1?argv[1]:"/etc/passwd",O_RDONLY);
+  if(fd<0){perror("open");return 1;} while((r=read(fd,b,sizeof b))>0) t+=r; printf("read %ld bytes\n",t); return 0; }''',
+"fork_exec.c": r'''/* Processes: fork() copies the process (copy-on-write), exec() replaces its image, wait() reaps it. */
+#include <stdio.h>
+#include <unistd.h>
+#include <sys/wait.h>
+int main(void){ pid_t c=fork(); if(c==0){ execlp("echo","echo","hello from the child",(char*)0); _exit(127);} int st; waitpid(c,&st,0);
+  printf("child %d finished with %d\n",(int)c,WEXITSTATUS(st)); return 0; }''',
+"busy_loop.c": r'''/* CPU-bound: high IPC, almost no system calls. Compare its counters with readfile. */
+#include <stdio.h>
+int main(void){ volatile unsigned long s=0; for(unsigned long i=0;i<400000000UL;i++) s+=i*i; printf("%lu\n",s); return 0; }''',
+}
+
+
+def make_samples():
+    d = Path(os.path.expanduser("~/ketchup-labs/lens")); d.mkdir(parents=True, exist_ok=True)
+    for name, src in SAMPLES.items():
+        (d / name).write_text(src + "\n")
+        exe = d / name[:-2]
+        r = subprocess.run(["gcc", "-O0", "-g", "-o", str(exe), str(d / name)], capture_output=True, text=True) if have("gcc") else None
+        print(("  built " if r and r.returncode == 0 else "  (not compiled) ") + str(exe))
+    print(f"\nTry:  cd {d} && ketchup-lens trace -- ./hello")
+
+
+def main():
+    ap = argparse.ArgumentParser(add_help=False)
+    ap.add_argument("cmd", nargs="?", default="help")
+    ap.add_argument("-o", "--out"); ap.add_argument("--no-open", action="store_true")
+    ap.add_argument("--timeout", type=float, default=30); ap.add_argument("--latency", action="store_true"); ap.add_argument("--skip")
+    argv = sys.argv[1:]
+    prog = []
+    if "--" in argv:
+        i = argv.index("--"); prog = argv[i + 1:]; argv = argv[:i]
+    a = ap.parse_args(argv)
+    if a.cmd == "trace":
+        if not prog: sys.exit("usage: ketchup-lens trace [options] -- CMD [ARGS]   (try: ketchup-lens samples)")
+        if not shutil.which(prog[0]) and not os.path.exists(prog[0]): sys.exit(f"ketchup-lens: {prog[0]}: not found")
+        a.out = a.out or None
+        path, data = build_report(prog, a.out, a)
+        for w in data["warnings"]: log("warning:", w)
+        print(f"Report: {path}")
+        if not a.no_open and not open_in_browser(path): print("Open it with a browser:  firefox " + str(path))
+    elif a.cmd == "sim":
+        if SHARE is None: sys.exit("simulator not found")
+        p = SHARE / "lens" / "simulator.html"
+        print(p)
+        if not open_in_browser(p): print("Open it with a browser:  firefox " + str(p))
+    elif a.cmd == "latency":
+        r, err = run_latency()
+        if not r: sys.exit("latency: " + err)
+        cache = Path(os.path.expanduser("~/.cache/ketchup-lens/latency.json")); cache.parent.mkdir(parents=True, exist_ok=True); cache.write_text(json.dumps(r))
+        for p in r["points"]: print(f"{p['bytes']//1024:>8} KiB   {p['ns']:7.2f} ns/load  " + "#" * min(70, int(p["ns"] / 2)))
+        print("\nSaved: the next 'ketchup-lens trace' report will include this curve.")
+    elif a.cmd == "hw": print_hw()
+    elif a.cmd == "samples": make_samples()
+    else: print(__doc__)
+
+
+if __name__ == "__main__":
+    main()

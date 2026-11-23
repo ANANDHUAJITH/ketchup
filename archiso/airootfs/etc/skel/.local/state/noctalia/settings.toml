@@ -1,0 +1,10 @@
+# Initial Noctalia state, so a new home directory starts like one that already finished
+# the first-run wizard. Settings changes overwrite these values.
+[shell]
+setup_wizard_enabled = false
+
+[wallpaper]
+enabled = true
+
+[wallpaper.default]
+path = "/usr/share/backgrounds/ketchup/legacy-red-night.jpg"

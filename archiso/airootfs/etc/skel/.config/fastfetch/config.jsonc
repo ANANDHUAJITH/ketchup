@@ -1,0 +1,2 @@
+{ "logo": { "type": "file", "source": "/usr/share/ketchup/ascii/ketchup-logo.txt" },
+  "modules": ["title","separator","os","kernel","uptime","packages","shell","de","cpu","gpu","memory","disk"] }

@@ -1,0 +1,89 @@
+#!/bin/bash
+# ketchup-installer-theme - render the Calamares theme in a Noctalia-matching dark
+# palette: Ayu (Mirage), Catppuccin (Mocha) or Dracula.
+#
+#   ketchup-installer-theme --detect          print the palette your Noctalia theme maps to
+#   ketchup-installer-theme [NAME]            render NAME (ayu|catppuccin|dracula) into the
+#                                             Calamares branding dir (needs root)
+#   ketchup-installer-theme NAME --out DIR    render into DIR instead (no root; for testing)
+#
+# With no NAME the palette is detected. KETCHUP_INSTALLER_THEME overrides detection.
+set -euo pipefail
+
+THEMES=/usr/share/ketchup/installer-themes
+BRANDING=/usr/share/calamares/branding/ketchup
+DEFAULT=ayu
+
+detect() {
+    local f t="" want
+    if [ -n "${KETCHUP_INSTALLER_THEME:-}" ]; then
+        want="${KETCHUP_INSTALLER_THEME}"
+    else
+        want=""
+        # settings.toml (written by Noctalia Settings) takes precedence over config.toml
+        for f in "${XDG_STATE_HOME:-$HOME/.local/state}/noctalia/settings.toml" \
+                 "${XDG_CONFIG_HOME:-$HOME/.config}/noctalia/config.toml" \
+                 /etc/skel/.config/noctalia/config.toml; do
+            [ -r "$f" ] || continue
+            want="$(awk '
+                /^[[:space:]]*\[/ { in_theme = ($0 ~ /^[[:space:]]*\[theme\][[:space:]]*(#.*)?$/); next }
+                in_theme && /^[[:space:]]*builtin[[:space:]]*=/ {
+                    sub(/^[^=]*=[[:space:]]*"/, ""); sub(/".*$/, ""); print; exit
+                }' "$f" 2>/dev/null || true)"
+            [ -n "$want" ] && break
+        done
+    fi
+    t="$(printf '%s' "$want" | tr '[:upper:]' '[:lower:]')"
+    case "$t" in
+        ayu*)        echo ayu ;;
+        catppuccin*) echo catppuccin ;;
+        dracula*)    echo dracula ;;
+        *)           echo "$DEFAULT" ;;
+    esac
+}
+
+name="" out="$BRANDING"
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --detect) detect; exit 0 ;;
+        --out)    out="${2:?--out needs a directory}"; shift ;;
+        -h|--help) sed -n '2,10p' "$0"; exit 0 ;;
+        -*) echo "ketchup-installer-theme: unknown option $1" >&2; exit 2 ;;
+        *)  name="$1" ;;
+    esac
+    shift
+done
+[ -n "$name" ] || name="$(detect)"
+name="$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')"
+[ -r "$THEMES/$name.theme" ] || { echo "ketchup-installer-theme: no such palette '$name' (ayu, catppuccin, dracula)" >&2; exit 2; }
+
+# shellcheck disable=SC1090
+. "$THEMES/$name.theme"
+
+mkdir -p "$out"
+render() {   # render TEMPLATE DEST
+    sed -e "s|@BG@|$BG|g" -e "s|@BG_ALT@|$BG_ALT|g" -e "s|@BG_DEEP@|$BG_DEEP|g" \
+        -e "s|@FG@|$FG|g" -e "s|@FG_DIM@|$FG_DIM|g" \
+        -e "s|@ACCENT@|$ACCENT|g" -e "s|@ACCENT_HOVER@|$ACCENT_HOVER|g" \
+        -e "s|@ACCENT_PRESSED@|$ACCENT_PRESSED|g" -e "s|@ACCENT_FG@|$ACCENT_FG|g" \
+        -e "s|@BORDER@|$BORDER|g" -e "s|@DISABLED_BG@|$DISABLED_BG|g" \
+        -e "s|@DISABLED_FG@|$DISABLED_FG|g" "$1" > "$2.tmp"
+    if grep -q '@[A-Z_]*@' "$2.tmp"; then
+        echo "ketchup-installer-theme: unreplaced token in $1" >&2; rm -f "$2.tmp"; exit 1
+    fi
+    mv -f "$2.tmp" "$2"
+    chmod 644 "$2"
+}
+render "$THEMES/stylesheet.qss.in" "$out/stylesheet.qss"
+render "$THEMES/show.qml.in"       "$out/show.qml"
+
+# the sidebar colours come from the style block in branding.desc, not from the stylesheet
+if [ -f "$out/branding.desc" ]; then
+    sed -i -E \
+        -e "s|^([[:space:]]*SidebarBackground:[[:space:]]*).*|\\1\"$BG_DEEP\"|" \
+        -e "s|^([[:space:]]*SidebarText:[[:space:]]*).*|\\1\"$FG_DIM\"|" \
+        -e "s|^([[:space:]]*SidebarTextCurrent:[[:space:]]*).*|\\1\"$ACCENT_FG\"|" \
+        -e "s|^([[:space:]]*SidebarBackgroundCurrent:[[:space:]]*).*|\\1\"$ACCENT\"|" \
+        "$out/branding.desc"
+fi
+echo "ketchup-installer-theme: rendered '$NAME' into $out"

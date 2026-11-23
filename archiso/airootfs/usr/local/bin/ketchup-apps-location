@@ -1,0 +1,83 @@
+#!/bin/bash
+# ketchup-apps-location - choose where software is installed.
+#   ketchup-apps-location                       interactive chooser
+#   ketchup-apps-location flatpak DIR           add a Flatpak installation "ketchup-extra" at DIR
+#   ketchup-apps-location distrobox DIR         store new Distrobox/Podman containers under DIR
+#   ketchup-apps-location status                show the current locations
+# Pacman packages always live in /usr. To put them on another disk, mount that disk at
+# /opt, /var/lib/flatpak or /var in /etc/fstab instead.
+set -u
+INST=/etc/flatpak/installations.d/ketchup-extra.conf
+SC="${XDG_CONFIG_HOME:-$HOME/.config}/containers/storage.conf"
+
+die() { echo "ketchup-apps-location: $*" >&2; exit 1; }
+
+# the target must be a POSIX filesystem (hard links and xattrs), not NTFS or FAT
+check_dir() {
+    local d="$1" fs
+    mkdir -p "$d" 2>/dev/null || [ -d "$d" ] || die "cannot create $d"
+    fs="$(stat -f -c %T "$d")"
+    case "$fs" in
+        ext2/ext3|ext4|ext2|btrfs|xfs|f2fs|zfs|overlayfs|tmpfs) return 0 ;;
+        *) die "$d is on a '$fs' filesystem. Use an ext4, btrfs, xfs or f2fs drive (NTFS, exFAT and FAT cannot hold apps)." ;;
+    esac
+}
+
+do_flatpak() {
+    local base dir
+    base="$(realpath -m "$1")"
+    [ "$EUID" -ne 0 ] && exec pkexec "$0" flatpak "$base"
+    dir="$base/flatpak"
+    check_dir "$dir"
+    mkdir -p /etc/flatpak/installations.d
+    cat > "$INST" <<CONF
+[Installation "ketchup-extra"]
+Path=$dir
+DisplayName=Ketchup apps ($dir)
+StorageType=harddisk
+CONF
+    flatpak remote-add --installation=ketchup-extra --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo 2>/dev/null
+    echo "Flatpak location ready: $dir"
+    echo "Install with:  flatpak install --installation=ketchup-extra flathub <app>"
+}
+
+do_distrobox() {
+    local dir
+    dir="$(realpath -m "$1")/containers/storage"
+    check_dir "$dir"
+    mkdir -p "$(dirname "$SC")"
+    [ -f "$SC" ] && cp "$SC" "$SC.bak"
+    printf '[storage]\ndriver = "overlay"\ngraphroot = "%s"\n' "$dir" > "$SC"
+    echo "New Distrobox/Podman containers will be stored in: $dir"
+    echo "Existing containers stay where they are and are not listed until you switch back (backup: $SC.bak)."
+}
+
+status() {
+    echo "Flatpak extra location:   $( [ -f "$INST" ] && sed -n 's/^Path=//p' "$INST" || echo 'not set')"
+    echo "Podman/Distrobox storage: $( [ -f "$SC" ] && sed -n 's/^graphroot *= *"\(.*\)"/\1/p' "$SC" || echo 'default (~/.local/share/containers)')"
+    echo "Pacman packages:          /usr (fixed)"
+}
+
+choose() {
+    local what dir
+    [ -t 0 ] || { sed -n '2,8p' "$0"; exit 0; }
+    echo "Where should apps be installed?"
+    echo "  1) Flatpak apps"
+    echo "  2) Distrobox / Podman containers"
+    echo "  3) Both"
+    read -r -p "Choose [1-3]: " what
+    case "$what" in 1|2|3) ;; *) echo "Cancelled."; exit 0 ;; esac
+    read -r -e -p "Folder on the drive to use: " dir
+    [ -n "$dir" ] || { echo "Cancelled."; exit 0; }
+    [ "$what" != 2 ] && do_flatpak "$dir"
+    [ "$what" != 1 ] && do_distrobox "$dir"
+    read -r -p "Press Enter to close. " _
+}
+
+case "${1:-}" in
+    flatpak)   [ -n "${2:-}" ] || die "usage: ketchup-apps-location flatpak DIR"; do_flatpak "$2" ;;
+    distrobox) [ -n "${2:-}" ] || die "usage: ketchup-apps-location distrobox DIR"; do_distrobox "$2" ;;
+    status)    status ;;
+    "")        choose ;;
+    *)         sed -n '2,8p' "$0" ;;
+esac

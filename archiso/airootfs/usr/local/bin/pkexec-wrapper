@@ -1,0 +1,13 @@
+#!/usr/bin/env sh
+# pkexec clears the environment of the elevated process, so the variables a GUI
+# application needs are passed through explicitly. XDG_RUNTIME_DIR is required: without
+# it Qt cannot locate the Wayland socket and aborts.
+exec pkexec env \
+    DISPLAY="$DISPLAY" \
+    HOME="$HOME" \
+    WAYLAND_DISPLAY="$WAYLAND_DISPLAY" \
+    XAUTHORITY="$XAUTHORITY" \
+    XDG_CURRENT_DESKTOP="$XDG_CURRENT_DESKTOP" \
+    XDG_SESSION_TYPE="$XDG_SESSION_TYPE" \
+    XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
+    dbus-launch "$@"

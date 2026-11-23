@@ -1,0 +1,20 @@
+# greetd owns VT1 and starts the Noctalia Greeter. greetd.service conflicts with
+# getty@tty1, so a text login and greetd never share VT1; tty2-tty6 stay text consoles.
+# `command` must be the noctalia-greeter-session wrapper, which starts the greeter's own
+# compositor, not the bare noctalia-greeter binary.
+#
+# WLR_RENDERER_ALLOW_SOFTWARE=1 lets the wlroots-based greeter compositor start on a
+# software renderer (VMs without 3D acceleration, the nomodeset entry). Real GPUs are
+# still used. greetd starts the greeter with a minimal environment, so variables are set
+# in the command.
+[terminal]
+vt = 1
+
+[default_session]
+command = "env WLR_RENDERER_ALLOW_SOFTWARE=1 /usr/bin/noctalia-greeter-session"
+user = "greeter"
+
+# Skip the login screen and start niri directly (not for installed laptops):
+#[initial_session]
+#command = "niri-session"
+#user = "liveuser"

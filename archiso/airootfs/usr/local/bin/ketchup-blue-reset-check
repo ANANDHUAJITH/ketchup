@@ -1,0 +1,17 @@
+#!/bin/bash
+# ketchup-blue-reset-check - run at the start of every graphical session (niri
+# spawn-at-startup). gsettings keeps the last icon theme across restarts, so this
+# restores the default theme unless blue mode was entered again in this session.
+set -u
+source /usr/local/bin/ketchup-blue-core
+
+ketchup_blue_is_on && exit 0   # this session already (re-)entered blue mode on its own
+
+current=""
+command -v gsettings >/dev/null && \
+    current="$(gsettings get org.gnome.desktop.interface icon-theme 2>/dev/null | tr -d "'")"
+if [ "$current" = "ketchup-blue" ]; then
+    ketchup_blue_refresh ketchup
+    ketchup_blue_wallpaper /usr/share/backgrounds/ketchup/legacy-red-night.jpg
+fi
+exit 0

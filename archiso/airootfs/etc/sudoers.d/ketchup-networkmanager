@@ -1,0 +1,3 @@
+# Allows ~/.bash_profile to start NetworkManager without a password, live and installed.
+# One command only; the live-only g_wheel rule is the broad one and is removed on install.
+%wheel ALL=(root) NOPASSWD: /usr/bin/systemctl start NetworkManager.service

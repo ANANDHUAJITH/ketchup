@@ -1,0 +1,21 @@
+#!/bin/bash
+# ketchup-install - start the Calamares installer from the live session.
+#
+#   ketchup-install                     run the installer
+#   ketchup-install --theme NAME        force the installer palette (ayu, catppuccin or dracula)
+log="${HOME:-/tmp}/ketchup-install.log"
+timedatectl set-ntp true 2>/dev/null || true
+echo "Ketchup installer started $(date -u '+%F %T') UTC" >> "$log"
+if [ -d /sys/firmware/efi ]; then echo "Firmware: UEFI" >> "$log"; else echo "Firmware: BIOS" >> "$log"; fi
+inxi -F >> "$log" 2>&1 || true
+# Overlay the Ketchup installer configuration on the package defaults.
+sudo mkdir -p /etc/calamares
+sudo cp -rf /usr/share/ketchup/calamares/. /etc/calamares/
+# Match the installer palette to the Noctalia theme (read as the calling user, before
+# pkexec). KETCHUP_INSTALLER_THEME overrides detection. Failure is not fatal: the
+# shipped files are already a valid Ayu render.
+[ "${1:-}" = "--theme" ] && [ -n "${2:-}" ] && export KETCHUP_INSTALLER_THEME="$2"
+theme="$(ketchup-installer-theme --detect 2>/dev/null)" || theme=""
+[ -n "$theme" ] && { sudo /usr/local/bin/ketchup-installer-theme "$theme" 2>&1 | tee -a "$log" >/dev/null; }
+sudo ldconfig 2>/dev/null   # register /usr/lib/ketchup-compat (boost libraries for calamares)
+exec pkexec-wrapper calamares -D6 >> "$log" 2>&1

@@ -1,0 +1,185 @@
+# Ketchup package list: niri + Noctalia, linux-zen, Rust tooling
+# --- base / kernel
+base
+linux-zen
+linux-firmware
+amd-ucode
+intel-ucode
+mkinitcpio
+mkinitcpio-archiso
+arch-install-scripts
+sudo
+polkit
+rsync
+less
+nano
+git
+wget
+curl
+bash-completion
+# --- boot / disks / filesystems
+plymouth
+grub
+limine
+efibootmgr
+os-prober
+syslinux
+memtest86+
+memtest86+-efi
+dosfstools
+e2fsprogs
+btrfs-progs
+xfsprogs
+f2fs-tools
+exfatprogs
+ntfs-3g
+lvm2
+mdadm
+cryptsetup
+parted
+gptfdisk
+smartmontools
+nvme-cli
+# --- network
+networkmanager
+wpa_supplicant
+wireless-regdb
+iw
+openssh
+# --- audio / graphics
+pipewire
+pipewire-alsa
+pipewire-pulse
+wireplumber
+alsa-utils
+sof-firmware
+rtkit
+mesa
+vulkan-icd-loader
+vulkan-radeon
+vulkan-intel
+vulkan-virtio
+libva-mesa-driver
+intel-media-driver
+xorg-xwayland
+# --- VM guests
+qemu-guest-agent
+spice-vdagent
+# --- login screen and desktop services (greetd config: /etc/greetd/config.toml,
+#     greeter config: /var/lib/noctalia-greeter/greeter.toml)
+greetd
+noctalia-greeter
+accountsservice
+qt6-svg
+qt6-declarative
+xdg-user-dirs
+xdg-utils
+power-profiles-daemon
+gvfs
+gvfs-mtp
+gvfs-afc
+blueman
+pavucontrol
+# --- niri session
+niri
+xwayland-satellite
+xdg-desktop-portal
+xdg-desktop-portal-gnome
+xdg-desktop-portal-gtk
+fuzzel
+mako
+swaybg
+swaylock
+swayidle
+wl-clipboard
+grim
+slurp
+polkit-gnome
+# --- Noctalia shell (AUR, built into the ketchup-local repo by tools/build-aur-packages.sh)
+noctalia
+matugen
+# --- shared apps
+firefox
+thunar
+file-roller
+# --- fonts
+noto-fonts
+noto-fonts-emoji
+ttf-dejavu
+ttf-liberation
+# --- performance
+zram-generator
+ananicy-cpp
+cachyos-ananicy-rules
+scx-scheds
+# --- Rust-based tools
+alacritty
+eza
+bat
+fd
+ripgrep
+sd
+dust
+procs
+bottom
+zoxide
+starship
+yazi
+helix
+zellij
+tealdeer
+paru
+fastfetch
+micro
+# --- containers / apps
+distrobox
+podman
+crun
+netavark
+aardvark-dns
+fuse-overlayfs
+passt
+catatonit
+flatpak
+# --- installer + repo plumbing
+cachyos-calamares-next
+cachyos-keyring
+cachyos-mirrorlist
+cachyos-v3-mirrorlist
+archlinux-keyring
+reflector
+inxi
+usbutils
+pciutils
+libnotify
+# --- developer and networking/OS-study tools (more groups: ketchup-devtools)
+base-devel
+gdb
+strace
+ltrace
+valgrind
+perf
+bpftrace
+man-db
+man-pages
+tmux
+linux-zen-headers
+tcpdump
+wireshark-cli
+nmap
+traceroute
+mtr
+bind
+ethtool
+iperf3
+socat
+openbsd-netcat
+nftables
+conntrack-tools
+whois
+lynis
+arch-audit
+# --- ketchup-lens, notif.yml / release.yml parsing
+graphviz
+python
+python-yaml

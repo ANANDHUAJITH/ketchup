@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=About Ketchup
+Comment=Read the Ketchup README and open the project on GitHub
+Exec=xdg-open /usr/share/ketchup/about.html
+Icon=ketchup-logo
+Terminal=false
+Categories=System;Settings;

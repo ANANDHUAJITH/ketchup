@@ -1,0 +1,153 @@
+/*
+ * Ketchup Calamares theme - TEMPLATE. Do not edit the rendered copy in
+ * /usr/share/calamares/branding/ketchup/: ketchup-install regenerates it
+ * every launch via ketchup-installer-theme from this file plus the chosen
+ * palette (/usr/share/ketchup/installer-themes/{ayu,catppuccin,dracula}.theme).
+ * Each colour placeholder (name wrapped in at-signs) is replaced with that
+ * palette's value.
+ *
+ * Palette picked from your Noctalia theme (Settings -> theme), or force one:
+ *   KETCHUP_INSTALLER_THEME=dracula ketchup-install
+ *
+ * branding.desc's `style:` block only colours the native sidebar widget
+ * (#sidebarApp) - the same script rewrites those four keys. Everything else
+ * (welcome/location/partition/etc. pages, buttons, inputs, progress bar) is
+ * plain Qt, which falls back to a light Fusion palette because no Qt theming
+ * engine is installed - hence this file. Calamares auto-loads a file named
+ * stylesheet.qss from the active branding directory.
+ *
+ * Scoped to #mainApp (Calamares' central/content widget) so it never touches
+ * #sidebarApp.
+ */
+
+#mainApp, #mainApp QWidget {
+    background-color: @BG@;
+    color: @FG@;
+}
+
+#mainApp QLabel {
+    background: transparent;
+}
+
+/* Sidebar container: keep it on the deep colour even if #mainApp turns out to
+ * be an ancestor of it. (The step list itself has a custom delegate and takes
+ * its colours from branding.desc `style:`, not from QSS.) */
+#sidebarApp,
+#mainApp #sidebarApp,
+#sidebarApp QWidget,
+#mainApp #sidebarApp QWidget {
+    background-color: @BG_DEEP@;
+}
+
+#mainApp QLineEdit,
+#mainApp QComboBox,
+#mainApp QTextEdit,
+#mainApp QPlainTextEdit,
+#mainApp QListView,
+#mainApp QTreeView,
+#mainApp QTableView,
+#mainApp QSpinBox {
+    background-color: @BG_ALT@;
+    color: @FG@;
+    border: 1px solid @BORDER@;
+    border-radius: 3px;
+    padding: 3px 6px;
+    selection-background-color: @ACCENT@;
+    selection-color: @ACCENT_FG@;
+}
+
+#mainApp QLineEdit:focus,
+#mainApp QComboBox:focus {
+    border: 1px solid @ACCENT@;
+}
+
+#mainApp QComboBox QAbstractItemView {
+    background-color: @BG_ALT@;
+    color: @FG@;
+    border: 1px solid @BORDER@;
+    selection-background-color: @ACCENT@;
+    selection-color: @ACCENT_FG@;
+}
+
+#mainApp QHeaderView::section {
+    background-color: @BG_DEEP@;
+    color: @FG_DIM@;
+    border: none;
+    border-right: 1px solid @BORDER@;
+    padding: 4px 6px;
+}
+
+#mainApp QPushButton {
+    background-color: @ACCENT@;
+    color: @ACCENT_FG@;
+    border: none;
+    border-radius: 4px;
+    padding: 6px 18px;
+}
+
+#mainApp QPushButton:hover {
+    background-color: @ACCENT_HOVER@;
+}
+
+#mainApp QPushButton:pressed {
+    background-color: @ACCENT_PRESSED@;
+}
+
+#mainApp QPushButton:disabled {
+    background-color: @DISABLED_BG@;
+    color: @DISABLED_FG@;
+}
+
+#mainApp QProgressBar {
+    border: 1px solid @BORDER@;
+    border-radius: 3px;
+    text-align: center;
+    color: @FG@;
+    background-color: @BG_ALT@;
+}
+
+#mainApp QProgressBar::chunk {
+    background-color: @ACCENT@;
+}
+
+#mainApp QRadioButton,
+#mainApp QCheckBox {
+    color: @FG@;
+    spacing: 6px;
+}
+
+#mainApp QGroupBox {
+    border: 1px solid @BORDER@;
+    border-radius: 4px;
+    margin-top: 8px;
+    color: @FG@;
+}
+
+#mainApp QScrollBar:vertical {
+    background: @BG@;
+    width: 12px;
+    margin: 0;
+}
+
+#mainApp QScrollBar::handle:vertical {
+    background: @BORDER@;
+    border-radius: 5px;
+    min-height: 24px;
+}
+
+#mainApp QScrollBar:horizontal {
+    background: @BG@;
+    height: 12px;
+    margin: 0;
+}
+
+#mainApp QScrollBar::handle:horizontal {
+    background: @BORDER@;
+    border-radius: 5px;
+    min-width: 24px;
+}
+
+#mainApp QScrollBar::add-line, #mainApp QScrollBar::sub-line {
+    width: 0;
+    height: 0;
+}

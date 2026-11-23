@@ -1,0 +1,122 @@
+#!/bin/bash
+# ketchup-find - find a file by extension, by name (exact or similar), or with one of
+# Ketchup's shortcuts. Uses plain find rather than locate, so it works the same on the
+# live image and on an installed system without a prebuilt database.
+#
+#   ketchup-find --ext conf,toml,kdl          every file with any of these extensions
+#   ketchup-find --name wallpaper             exact-or-similar name match (case-insensitive, substring + fuzzy)
+#   ketchup-find --wallpapers                 every wallpaper/background image Ketchup knows about
+#   ketchup-find --configs                    every known config file (niri, noctalia, shell, systemd user units)
+#   ketchup-find --cmds                       same as `ketchup-verify --cmds`
+#   ketchup-find --all <pattern>              search the whole filesystem (slow), not just the default roots
+#
+# Default search roots: $HOME, /etc, /etc/skel, /usr/share, /usr/local and /root (if readable).
+# --all searches all of / instead, excluding /proc, /sys, /dev and /run.
+set -u
+EXT=""; NAME=""; MODE=""; ALL=0; QUIET=0
+ROOTS=("$HOME" /etc /etc/skel /usr/share /usr/local)
+[ -r /root ] && ROOTS+=(/root)
+
+usage() { sed -n '2,14p' "$0"; }
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --ext) EXT="$2"; shift 2 ;;
+        --name) NAME="$2"; shift 2 ;;
+        --wallpapers) MODE=wallpapers; shift ;;
+        --configs) MODE=configs; shift ;;
+        --cmds) MODE=cmds; shift ;;
+        --all) ALL=1; shift; [ $# -gt 0 ] && [ "${1:0:2}" != "--" ] && { NAME="$1"; shift; } ;;
+        -q|--quiet) QUIET=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        *) if [ -z "$NAME" ] && [ -z "$MODE" ]; then NAME="$1"; shift; else echo "Unknown argument: $1" >&2; usage; exit 1; fi ;;
+    esac
+done
+
+if [ "$ALL" = 1 ]; then ROOTS=(/); fi
+
+find_args=()
+for r in "${ROOTS[@]}"; do [ -e "$r" ] && find_args+=("$r"); done
+PRUNE=(-path /proc -o -path /sys -o -path /dev -o -path /run -o -path /tmp -o -path '*/.cache')
+
+do_find() {
+    find "${find_args[@]}" \( "${PRUNE[@]}" \) -prune -o -type f -print 2>/dev/null
+}
+
+case "$MODE" in
+    cmds)
+        exec /usr/local/bin/ketchup-verify --cmds
+        ;;
+    wallpapers)
+        echo "Known wallpaper locations:"
+        for d in /usr/share/backgrounds/ketchup "$HOME/.config/noctalia" \
+                 "${XDG_STATE_HOME:-$HOME/.local/state}/noctalia" /etc/skel/.config/noctalia; do
+            [ -d "$d" ] || continue
+            find "$d" -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \) 2>/dev/null
+        done
+        echo
+        echo "Currently configured as default (noctalia config.toml):"
+        for c in "${XDG_CONFIG_HOME:-$HOME/.config}/noctalia/config.toml" /etc/skel/.config/noctalia/config.toml; do
+            [ -f "$c" ] && grep -E '^\s*(path|directory)\s*=' "$c" | sed 's/^/  /'
+        done
+        exit 0
+        ;;
+    configs)
+        echo "Known Ketchup-relevant config files:"
+        for f in "${XDG_CONFIG_HOME:-$HOME/.config}/niri/config.kdl" \
+                 "${XDG_CONFIG_HOME:-$HOME/.config}/noctalia/config.toml" \
+                 "${XDG_STATE_HOME:-$HOME/.local/state}/noctalia/settings.toml" \
+                 "$HOME/.bash_profile" "$HOME/.bashrc" \
+                 /etc/greetd/config.toml \
+                 /var/lib/noctalia-greeter/greeter.toml \
+                 /etc/sudoers.d/ketchup-networkmanager \
+                 /etc/systemd/system/plymouth-quit.service.d/ketchup-retain-splash.conf \
+                 /etc/ketchup-release /etc/pacman.conf; do
+            [ -e "$f" ] && echo "  $f"
+        done
+        echo
+        echo "Every *.kdl / *.toml under \$HOME/.config and /etc/skel:"
+        for d in "${XDG_CONFIG_HOME:-$HOME/.config}" /etc/skel/.config; do
+            [ -d "$d" ] || continue
+            find "$d" -type f \( -iname '*.kdl' -o -iname '*.toml' -o -iname '*.conf' \) 2>/dev/null
+        done
+        exit 0
+        ;;
+esac
+
+if [ -n "$EXT" ]; then
+    IFS=',' read -ra exts <<< "$EXT"
+    name_expr=()
+    for e in "${exts[@]}"; do
+        [ ${#name_expr[@]} -gt 0 ] && name_expr+=(-o)
+        name_expr+=(-iname "*.${e#.}")
+    done
+    find "${find_args[@]}" \( "${PRUNE[@]}" \) -prune -o -type f \( "${name_expr[@]}" \) -print 2>/dev/null
+fi
+
+if [ -n "$NAME" ]; then
+    [ -n "$EXT" ] && echo
+    # case-insensitive substring match first
+    exact="$(find "${find_args[@]}" \( "${PRUNE[@]}" \) -prune -o -type f -iname "*${NAME}*" -print 2>/dev/null)"
+    if [ -n "$exact" ]; then
+        [ "$QUIET" = 1 ] || echo "Matches for \"$NAME\" (exact/substring):"
+        printf '%s\n' "$exact"
+    else
+        [ "$QUIET" = 1 ] || echo "No exact/substring match for \"$NAME\" - trying a looser (similar-name) search..."
+        # fallback: every word of the query must appear in the name, in any order
+        IFS='_-. ' read -ra chunks <<< "$NAME"
+        expr=()
+        for c in "${chunks[@]}"; do
+            [ -z "$c" ] && continue
+            [ ${#expr[@]} -gt 0 ] && expr+=(-a)
+            expr+=(-iname "*${c}*")
+        done
+        if [ ${#expr[@]} -gt 0 ]; then
+            find "${find_args[@]}" \( "${PRUNE[@]}" \) -prune -o -type f \( "${expr[@]}" \) -print 2>/dev/null
+        fi
+    fi
+fi
+
+if [ -z "$EXT" ] && [ -z "$NAME" ] && [ -z "$MODE" ]; then
+    usage; exit 1
+fi

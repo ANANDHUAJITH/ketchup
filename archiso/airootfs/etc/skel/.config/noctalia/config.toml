@@ -1,0 +1,44 @@
+# Default Noctalia configuration. Changes made in Noctalia Settings are written to
+# ~/.local/state/noctalia/settings.toml, which takes precedence over this file.
+
+[wallpaper]
+enabled = true
+fill_mode = "crop"
+directory = "/usr/share/backgrounds/ketchup"
+directory_light = "/usr/share/backgrounds/ketchup"
+directory_dark = "/usr/share/backgrounds/ketchup"
+
+[wallpaper.default]
+path = "/usr/share/backgrounds/ketchup/legacy-red-night.jpg"
+
+[wallpaper.automation]
+enabled = false
+
+[[wallpaper.favorite]]
+path = "/usr/share/backgrounds/ketchup/legacy-red-night.jpg"
+theme_mode = "dark"
+
+[[wallpaper.favorite]]
+path = "/usr/share/backgrounds/ketchup/legacy-red-dawn.jpg"
+theme_mode = "light"
+
+[[wallpaper.favorite]]
+path = "/usr/share/backgrounds/ketchup/mythical-blue-night.jpg"
+theme_mode = "dark"
+
+[[wallpaper.favorite]]
+path = "/usr/share/backgrounds/ketchup/mythical-blue-dawn.jpg"
+theme_mode = "light"
+
+[shell]
+niri_overview_type_to_launch_enabled = true
+# Disables Noctalia's first-run wizard.
+setup_wizard_enabled = false
+
+# Bundled palettes: Ayu, Catppuccin, Dracula, Eldritch, Gruvbox, Kanagawa, Noctalia, Nord,
+# Rosé Pine, Tokyo-Night. The installer follows Ayu, Catppuccin and Dracula. For the login
+# screen use Settings -> Security -> Noctalia Greeter -> Sync Now (or F7 on the login screen).
+[theme]
+mode = "dark"
+source = "builtin"
+builtin = "Ayu"

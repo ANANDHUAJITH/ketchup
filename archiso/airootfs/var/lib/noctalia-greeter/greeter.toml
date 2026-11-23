@@ -1,0 +1,20 @@
+# Noctalia Greeter administrator settings for the live image. Values here take precedence
+# over Sync and over choices made on the login screen. The colour scheme is in sync.toml.
+# Installed systems get their own copy from ketchup-post-install.
+
+# Open on the liveuser password step. The account has an empty password: press Enter.
+[user]
+default = "liveuser"
+
+[auth]
+allow_empty_password = true
+
+[clock]
+enabled = true
+
+# Same wallpaper as the live desktop, dimmed. Left out on installed systems so that
+# "Sync Now" can bring the user's own wallpaper to the login screen.
+[appearance.wallpaper]
+path = "/usr/share/backgrounds/ketchup/legacy-red-night.jpg"
+fill_mode = "crop"
+tint = 0.3

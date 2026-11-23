@@ -1,0 +1,284 @@
+#!/bin/bash
+# ketchup-upgrade - atomic, transactional system update for an installed
+# Ketchup system (rolling packages, with named major trains: 26.0, 27.0, ...).
+#
+#   ketchup-upgrade                 apply the update in a new Btrfs snapshot; the running
+#                                   system is not modified until the next reboot
+#   ketchup-upgrade check           look for package updates and a new release train;
+#                                   exit 1 if there are any, install nothing
+#   ketchup-upgrade --auto          non-interactive (used by the timer); never reboots
+#                                   unless --reboot is also given
+#   ketchup-upgrade --reboot        reboot into the new snapshot when it is ready
+#   ketchup-upgrade history         list the root snapshots kept for rollback
+#   ketchup-upgrade rollback        make the previous system permanent (run it after
+#                                   booting "Ketchup (previous system)")
+#   ketchup-upgrade prune           delete snapshots beyond KETCHUP_KEEP_SNAPSHOTS
+#
+# The update runs inside a snapshot of the root subvolume (arch-chroot) and the boot menu
+# is switched to it only after every step has succeeded. A failure leaves the running
+# system untouched, and the previous root stays bootable as a separate boot entry.
+# See docs/UPDATES.md.
+#
+# A live session has no disk to snapshot: the command then offers a plain pacman -Syu of
+# the live overlay, which does not survive a reboot.
+set -u
+CONF=/etc/ketchup/upgrade.conf
+# shellcheck source=/dev/null
+[ -f "$CONF" ] && . "$CONF"
+: "${KETCHUP_NOTIFY_URL:=https://raw.githubusercontent.com/ANANDHUAJITH/ketchup/main/notif.yml}"
+: "${KETCHUP_RELEASE_MANIFEST_URL:=https://raw.githubusercontent.com/ANANDHUAJITH/ketchup-pkg/main/release.yml}"
+: "${KETCHUP_PKG_REPO_NAME:=ketchup-pkg}"
+: "${KETCHUP_KEEP_SNAPSHOTS:=3}"
+: "${KETCHUP_AUTO_APPLY:=no}"
+. /usr/lib/ketchup/notify-lib.sh 2>/dev/null || true
+
+STATE_DIR=/var/lib/ketchup/upgrade
+LOG="$STATE_DIR/log"
+SNAP_PREFIX="ketchup"               # snapshots are created at @snapshots/$SNAP_PREFIX-<timestamp>/snapshot
+WORK=/run/ketchup-upgrade
+PREV_STATE=/etc/ketchup/previous-root
+AUTO=0; REBOOT=0; ACTION="apply"
+
+die() { echo "ketchup-upgrade: $*" >&2; exit 1; }
+log() { mkdir -p "$STATE_DIR"; echo "[$(date -Iseconds)] $*" | tee -a "$LOG"; }
+is_live() { [ -d /run/archiso ]; }
+need_root() { [ "$EUID" = 0 ] || die "must be run as root"; }
+
+for a in "$@"; do
+    case "$a" in
+        check|history|rollback|prune) ACTION="$a" ;;
+        --auto) AUTO=1 ;;
+        --reboot) REBOOT=1 ;;
+        -h|--help) sed -n '2,23p' "$0"; exit 0 ;;
+        apply) ACTION="apply" ;;
+        *) die "unknown argument '$a' (try --help)" ;;
+    esac
+done
+
+# ---------------------------------------------------------------- manifest / notify
+fetch_release_manifest() {  # prints "VERSION CODENAME" on stdout, or nothing if unreachable
+    local tmp; tmp="$(mktemp)"
+    curl -fsSL --max-time 15 "$KETCHUP_RELEASE_MANIFEST_URL" -o "$tmp" 2>/dev/null || { rm -f "$tmp"; return 1; }
+    if command -v python3 >/dev/null && python3 -c 'import yaml' 2>/dev/null; then
+        python3 -c '
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1])) or {}
+print(d.get("version",""), d.get("codename",""))
+' "$tmp"
+    else
+        local v c
+        v="$(sed -n 's/^version:[[:space:]]*//p' "$tmp" | head -n1 | tr -d '"'"'"'')"
+        c="$(sed -n 's/^codename:[[:space:]]*//p' "$tmp" | head -n1 | tr -d '"'"'"'')"
+        echo "$v $c"
+    fi
+    rm -f "$tmp"
+}
+
+ver_major() { echo "${1%%.*}"; }
+
+notify() { command -v ketchup_notify_send >/dev/null 2>&1 && ketchup_notify_send "$@" || true; }
+
+# ---------------------------------------------------------------- check
+cmd_check() {
+    local cur_ver new_ver new_name rc=0
+    . /etc/ketchup-release 2>/dev/null; cur_ver="${KETCHUP_VERSION:-unknown}"
+    read -r new_ver new_name < <(fetch_release_manifest) || { log "check: release manifest unreachable"; return 2; }
+    if [ -n "$new_ver" ] && [ "$(ver_major "$new_ver")" != "$(ver_major "$cur_ver")" ]; then
+        log "check: new major train available: $cur_ver -> $new_ver $new_name"
+        [ "${KETCHUP_CHECK_NOTIFY:-yes}" = yes ] && notify "Ketchup $new_ver is available" \
+            "Run 'ketchup-upgrade' to move from $cur_ver to $new_ver${new_name:+ ($new_name)}." normal ketchup
+        rc=1
+    fi
+    pacman -Sy >/dev/null 2>&1
+    local n; n="$(pacman -Qu 2>/dev/null | wc -l)"
+    if [ "$n" -gt 0 ]; then
+        log "check: $n package update(s) pending"
+        rc=1
+    else
+        log "check: up to date"
+    fi
+    return $rc
+}
+
+# ---------------------------------------------------------------- live fallback
+cmd_apply_live() {
+    echo "Running in a live/USB session: there is no persistent disk to snapshot,"
+    echo "so this updates the in-memory overlay only - it will NOT survive a reboot."
+    echo "For a permanent update, install Ketchup first, or grab a fresh ISO."
+    [ "$AUTO" = 1 ] && { echo "(--auto: skipping, live sessions are never auto-updated)"; return 0; }
+    read -r -p "Update this live session's packages now? [y/N] " a
+    case "$a" in y|Y) ;; *) echo "cancelled"; return 0 ;; esac
+    pacman -Syu
+}
+
+# ---------------------------------------------------------------- btrfs helpers
+root_src() { findmnt -no SOURCE /; }
+root_fstype() { findmnt -no FSTYPE /; }
+root_subvol() { findmnt -no OPTIONS / | tr ',' '\n' | sed -n 's/^subvol=\///p'; }
+
+mount_btrfs_top() {  # mounts the whole btrfs volume (subvolid=5) at $WORK/btrfs-root
+    mkdir -p "$WORK/btrfs-root"
+    mountpoint -q "$WORK/btrfs-root" && return 0
+    mount -o subvolid=5 "$(root_src)" "$WORK/btrfs-root" || die "could not mount the Btrfs top-level subvolume"
+}
+
+umount_btrfs_top() { mountpoint -q "$WORK/btrfs-root" 2>/dev/null && umount "$WORK/btrfs-root"; }
+
+# ---------------------------------------------------------------- the transactional update
+cmd_apply_atomic() {
+    local ts newsub newpath cursub curver newver newname major_bump=0
+    ts="$(date +%Y%m%d%H%M%S)"
+    cursub="$(root_subvol)"; [ -n "$cursub" ] || cursub="@"
+    newsub="@snapshots/${SNAP_PREFIX}-${ts}/snapshot"
+
+    mount_btrfs_top
+    mkdir -p "$WORK/btrfs-root/@snapshots/${SNAP_PREFIX}-${ts}"
+    log "snapshotting '$cursub' -> '$newsub'"
+    btrfs subvolume snapshot "$WORK/btrfs-root/$cursub" "$WORK/btrfs-root/$newsub" \
+        || { umount_btrfs_top; die "btrfs snapshot failed; nothing was changed"; }
+    newpath="$WORK/btrfs-root/$newsub"
+
+    # back up the running kernel and initramfs before pacman replaces them in the shared /boot
+    local kbackup="/boot/ketchup/rollback/$ts"
+    mkdir -p "$kbackup"
+    cp -a /boot/vmlinuz-* /boot/initramfs-*.img "$kbackup/" 2>/dev/null
+    echo "$cursub" > "$kbackup/subvol"
+    . /etc/ketchup-release 2>/dev/null; echo "${KETCHUP_VERSION:-unknown}" > "$kbackup/version"
+
+    log "applying update inside the new snapshot (running system is untouched)"
+    # pacman -Sy exits non-zero if ANY enabled repo fails to sync, even when the others
+    # (cachyos, core, extra, multilib) synced fine - and ketchup-pkg is just a GitHub Pages
+    # site, so it can 404 on its own without anything actually being wrong. Only treat the
+    # sync as fatal when the default repos themselves did not come down, since those are
+    # what the system actually needs to update.
+    if ! arch-chroot "$newpath" pacman -Sy --noconfirm; then
+        if arch-chroot "$newpath" bash -c '[ -s /var/lib/pacman/sync/core.db ] && [ -s /var/lib/pacman/sync/extra.db ]'; then
+            log "WARNING: one or more optional repositories (e.g. ketchup-pkg) failed to sync; continuing with the default repositories (cachyos/core/extra)"
+        else
+            log "sync failed; discarding the snapshot"; btrfs subvolume delete "$newpath" >/dev/null; umount_btrfs_top
+            die "pacman sync failed inside the snapshot - running system unaffected"
+        fi
+    fi
+
+    . /etc/ketchup-release 2>/dev/null; curver="${KETCHUP_VERSION:-26.0}"
+    read -r newver newname < <(fetch_release_manifest)
+    if [ -n "$newver" ] && [ "$(ver_major "$newver")" != "$(ver_major "$curver")" ]; then
+        major_bump=1
+        echo
+        echo "=== A new Ketchup release train is available: $curver -> $newver${newname:+ \"$newname\"} ==="
+        echo "This still updates in the background the same way; it is not a reinstall."
+        if [ "$AUTO" = 1 ]; then
+            echo "(--auto: continuing)"
+        else
+            read -r -p "Continue? [Y/n] " a; case "$a" in n|N) btrfs subvolume delete "$newpath" >/dev/null; umount_btrfs_top; echo "cancelled, nothing changed"; exit 0 ;; esac
+        fi
+    fi
+
+    if ! arch-chroot "$newpath" pacman -Su --noconfirm; then
+        log "pacman -Su failed; discarding the snapshot"; btrfs subvolume delete "$newpath" >/dev/null; umount_btrfs_top
+        die "update failed inside the snapshot - running system unaffected, nothing to roll back"
+    fi
+
+    arch-chroot "$newpath" mkinitcpio -P || log "WARNING: mkinitcpio reported problems inside the new snapshot"
+
+    # point the snapshot's fstab and kernel command line at itself, then regenerate the boot menu
+    sed -i "s#subvol=/${cursub}\\([,[:space:]]\\)#subvol=/${newsub}\\1#" "$newpath/etc/fstab"
+    rm -f "$newpath/etc/kernel/cmdline"
+    {
+        echo "PREV_SUBVOL=$cursub"
+        echo "PREV_KERNEL_DIR=$kbackup"
+        echo "PREV_VERSION=$curver"
+        echo "SAVED_AT=$(date -Iseconds)"
+    } > "$newpath/etc/ketchup/previous-root"
+    if [ "$major_bump" = 1 ] && [ -n "$newver" ]; then
+        arch-chroot "$newpath" ketchup-version --set "$newver" "$newname"
+    else
+        arch-chroot "$newpath" ketchup-version --set "$curver" "$newname" >/dev/null 2>&1 || true
+    fi
+    arch-chroot "$newpath" ketchup-limine update || log "WARNING: boot menu regeneration reported problems"
+
+    umount_btrfs_top
+    log "upgrade ready: $newsub (train ${newver:-$curver})"
+    notify "Ketchup update ready" "Reboot to switch to the new snapshot. The previous system stays available at the boot menu." normal ketchup
+
+    echo
+    echo "Update applied to a new snapshot. Your running session is unchanged."
+    echo "Reboot to switch to it; 'Ketchup (previous system)' stays in the boot menu either way."
+    cmd_prune
+
+    if [ "$REBOOT" = 1 ]; then
+        echo "Rebooting now (--reboot)..."
+        systemctl reboot
+    fi
+}
+
+# ---------------------------------------------------------------- rollback / history / prune
+cmd_history() {
+    mount_btrfs_top
+    echo "Current root subvolume: $(root_subvol)"
+    echo
+    printf '%-40s %-12s %s\n' "SNAPSHOT" "VERSION" "CREATED"
+    for d in "$WORK"/btrfs-root/@snapshots/${SNAP_PREFIX}-*; do
+        [ -d "$d/snapshot" ] || continue
+        local ts v
+        ts="$(basename "$d")"; v="unknown"
+        [ -f "$d/snapshot/etc/ketchup-release" ] && v="$(. "$d/snapshot/etc/ketchup-release" 2>/dev/null; echo "${KETCHUP_VERSION:-unknown}")"
+        printf '%-40s %-12s %s\n' "$ts" "$v" "$(date -d "@$(stat -c %Y "$d")" '+%F %T' 2>/dev/null)"
+    done
+    umount_btrfs_top
+}
+
+cmd_prune() {
+    mount_btrfs_top
+    local keep="$KETCHUP_KEEP_SNAPSHOTS"
+    local dirs; mapfile -t dirs < <(ls -1dt "$WORK"/btrfs-root/@snapshots/${SNAP_PREFIX}-*/ 2>/dev/null)
+    local i=0
+    for d in "${dirs[@]}"; do
+        i=$((i+1))
+        [ "$i" -le "$((keep+1))" ] && continue   # keep one extra: the "previous system" snapshot
+        log "pruning old snapshot $(basename "$d")"
+        btrfs subvolume delete "${d}snapshot" >/dev/null 2>&1
+        rm -rf "$d"
+    done
+    umount_btrfs_top
+}
+
+cmd_rollback() {
+    [ -f "$PREV_STATE" ] || die "no recorded previous root on *this* system - if the new upgrade won't even boot, just pick 'Ketchup (previous system)' at the boot menu instead of running this."
+    # shellcheck source=/dev/null
+    . "$PREV_STATE"
+    echo "This system's own records point back to: ${PREV_SUBVOL:-unknown} (Ketchup ${PREV_VERSION:-unknown})"
+    echo "Rollback only makes sense run from the OLD system (i.e. after picking"
+    echo "'Ketchup (previous system)' at the boot menu and logging in there)."
+    read -r -p "Promote THIS running system back to being the only/default one, and delete the newer snapshot? [y/N] " a
+    case "$a" in y|Y) ;; *) echo "cancelled"; return 0 ;; esac
+    if [ -n "${PREV_KERNEL_DIR:-}" ] && [ -d "$PREV_KERNEL_DIR" ]; then
+        cp -a "$PREV_KERNEL_DIR"/vmlinuz-* "$PREV_KERNEL_DIR"/initramfs-*.img /boot/ 2>/dev/null
+    fi
+    rm -f "$PREV_STATE"
+    ketchup-limine update
+    echo "Rolled back. The newer snapshot is left on disk; run 'ketchup-upgrade prune' to reclaim the space once you're sure."
+}
+
+# ---------------------------------------------------------------- dispatch
+mkdir -p "$STATE_DIR"
+case "$ACTION" in
+    check) need_root; cmd_check ;;
+    history) need_root; cmd_history ;;
+    prune) need_root; cmd_prune ;;
+    rollback) need_root; cmd_rollback ;;
+    apply)
+        need_root
+        if is_live; then
+            cmd_apply_live
+        elif [ "$(root_fstype)" = "btrfs" ] && findmnt -no OPTIONS / | grep -q 'subvol='; then
+            cmd_apply_atomic
+        else
+            echo "This root filesystem isn't Btrfs with subvolumes (needed for atomic,"
+            echo "rollback-safe updates), so this falls back to a plain, non-atomic"
+            echo "'pacman -Syu'. Consider reinstalling with the default Btrfs layout."
+            [ "$AUTO" = 1 ] || { read -r -p "Continue anyway? [y/N] " a; case "$a" in y|Y) ;; *) exit 0 ;; esac; }
+            pacman -Syu --noconfirm
+        fi
+        ;;
+esac

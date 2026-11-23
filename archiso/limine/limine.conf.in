@@ -1,0 +1,64 @@
+# Limine boot menu template for the Ketchup live ISO.
+# make_limine_iso (util-iso.sh) substitutes the install directory, architecture and
+# volume label placeholders, expands the microcode and tools blocks, and installs the
+# result as /boot/limine/limine.conf.
+#
+# Kernel parameters shared by every live entry:
+#   archisolabel                        locate the boot medium by its ISO volume label
+#   copytoram=n                         read the image from the medium instead of copying it into RAM
+#   systemd.condition-needs-update=0    skip the ldconfig / sysusers / hwdb rebuild that the
+#                                       overlay would otherwise trigger on every boot
+#   noirqdebug                          never let the kernel disable an IRQ reported as "nobody cared"
+
+timeout: 2
+default_entry: 1
+editor_enabled: yes
+interface_branding: Ketchup Live
+interface_branding_color: 1
+wallpaper: boot():/boot/limine/wallpaper.png
+wallpaper_style: stretched
+term_background: 40000000
+
+/Ketchup (zen kernel)
+    comment: Default entry.
+    protocol: linux
+    path: boot():/%INSTALL_DIR%/boot/%ARCH%/vmlinuz-linux-zen
+@MICROCODE@
+    module_path: boot():/%INSTALL_DIR%/boot/%ARCH%/initramfs-linux-zen.img
+    cmdline: archisobasedir=%INSTALL_DIR% archisolabel=%ISO_LABEL% cow_spacesize=4G copytoram=n module_blacklist=pcspkr nvme_load=yes noirqdebug systemd.condition-needs-update=0 quiet splash loglevel=3 vt.global_cursor_default=0
+
+/Ketchup safe graphics (nomodeset)
+    comment: Use this when the screen stays black or garbled.
+    protocol: linux
+    path: boot():/%INSTALL_DIR%/boot/%ARCH%/vmlinuz-linux-zen
+@MICROCODE@
+    module_path: boot():/%INSTALL_DIR%/boot/%ARCH%/initramfs-linux-zen.img
+    cmdline: archisobasedir=%INSTALL_DIR% archisolabel=%ISO_LABEL% cow_spacesize=4G copytoram=n module_blacklist=nvidia,nvidia_modeset,nvidia_uvm,nvidia_drm,pcspkr nomodeset nvme_load=yes noirqdebug systemd.condition-needs-update=0
+
+/IRQ troubleshooting
+    comment: Pick one if the default entry still reports "irq N: nobody cared".
+
+    //irqfixup (search all handlers for the unhandled IRQ)
+        comment: Keeps the kernel's IRQ safety net but searches every handler for unhandled IRQs.
+        protocol: linux
+        path: boot():/%INSTALL_DIR%/boot/%ARCH%/vmlinuz-linux-zen
+@MICROCODE@
+        module_path: boot():/%INSTALL_DIR%/boot/%ARCH%/initramfs-linux-zen.img
+        cmdline: archisobasedir=%INSTALL_DIR% archisolabel=%ISO_LABEL% cow_spacesize=4G copytoram=n module_blacklist=pcspkr nvme_load=yes systemd.condition-needs-update=0 irqfixup
+
+    //irqpoll + pci=nomsi (strongest compatibility mode)
+        comment: Polls every handler on every IRQ and avoids MSI. Slower, but boots on very broken firmware.
+        protocol: linux
+        path: boot():/%INSTALL_DIR%/boot/%ARCH%/vmlinuz-linux-zen
+@MICROCODE@
+        module_path: boot():/%INSTALL_DIR%/boot/%ARCH%/initramfs-linux-zen.img
+        cmdline: archisobasedir=%INSTALL_DIR% archisolabel=%ISO_LABEL% cow_spacesize=4G copytoram=n module_blacklist=pcspkr systemd.condition-needs-update=0 irqpoll pci=nomsi
+
+    //No IRQ workaround (stock kernel behaviour)
+        comment: For diagnosis: the kernel may disable a misbehaving IRQ.
+        protocol: linux
+        path: boot():/%INSTALL_DIR%/boot/%ARCH%/vmlinuz-linux-zen
+@MICROCODE@
+        module_path: boot():/%INSTALL_DIR%/boot/%ARCH%/initramfs-linux-zen.img
+        cmdline: archisobasedir=%INSTALL_DIR% archisolabel=%ISO_LABEL% cow_spacesize=4G copytoram=n module_blacklist=pcspkr nvme_load=yes systemd.condition-needs-update=0
+@TOOLS@

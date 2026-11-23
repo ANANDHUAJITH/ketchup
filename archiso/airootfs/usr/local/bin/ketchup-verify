@@ -1,0 +1,239 @@
+#!/bin/bash
+# ketchup-verify - check that the Ketchup files, services and configuration are in place.
+#
+#   ketchup-verify              run every check (PASS/INFO/WARN/FAIL)
+#   ketchup-verify --cmds       just list every ketchup-* command found, with its path
+#   ketchup-verify --json       machine-readable result
+#
+# Read-only. Works on the live image and on an installed system. Exit code 1 if any
+# check FAILs. See also ketchup-audit (security) and ketchup-help-bugs (logs).
+set -u
+JSON=0; CMDS_ONLY=0
+for a in "$@"; do case "$a" in
+    --json) JSON=1 ;;
+    --cmds) CMDS_ONLY=1 ;;
+    -h|--help) sed -n '2,9p' "$0"; exit 0 ;;
+esac; done
+[ -t 1 ] && [ "$JSON" = 0 ] && { G=$'\e[32m'; Y=$'\e[33m'; R=$'\e[31m'; B=$'\e[36m'; N=$'\e[0m'; } || { G=""; Y=""; R=""; B=""; N=""; }
+LIVE=0; [ -d /run/archiso ] && LIVE=1
+NP=0; NI=0; NW=0; NF=0; OUT=()
+esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+add() { # add STATUS "title" "detail/fix"
+    case "$1" in PASS) NP=$((NP+1)); c=$G ;; INFO) NI=$((NI+1)); c=$B ;; WARN) NW=$((NW+1)); c=$Y ;; FAIL) NF=$((NF+1)); c=$R ;; esac
+    if [ "$JSON" = 1 ]; then OUT+=("{\"status\":\"$1\",\"check\":\"$(esc "$2")\",\"detail\":\"$(esc "${3:-}")\"}")
+    else printf '  %s%-4s%s %s\n' "$c" "$1" "$N" "$2"; if [ -n "${3:-}" ]; then printf '         %s\n' "$3"; fi; fi
+}
+sec() { [ "$JSON" = 1 ] || printf '\n%s== %s ==%s\n' "$B" "$1" "$N"; }
+
+# ---- command inventory: every *ketchup* executable actually on disk -------
+list_cmds() {
+    local f desc
+    for d in /usr/local/bin /usr/local/sbin /usr/bin; do
+        [ -d "$d" ] || continue
+        find "$d" -maxdepth 1 -iname '*ketchup*' -type f 2>/dev/null
+    done | sort -u -t/ -k5 | while read -r f; do
+        [ -x "$f" ] || continue
+        desc="$(sed -n '2p' "$f" 2>/dev/null | sed -E 's/^#+ *//; s/^'"$(basename "$f")"' *-? *//')"
+        if [ "$JSON" = 1 ]; then
+            printf '{"cmd":"%s","path":"%s","desc":"%s"}\n' "$(esc "$(basename "$f")")" "$(esc "$f")" "$(esc "$desc")"
+        else
+            printf '  %-28s %s\n' "$(basename "$f")" "$f"
+            [ -n "$desc" ] && printf '      %s\n' "$desc"
+        fi
+    done
+}
+
+if [ "$CMDS_ONLY" = 1 ]; then
+    if [ "$JSON" = 1 ]; then printf '[%s]\n' "$(list_cmds | paste -sd, -)"; else
+        echo "All ketchup commands found on this system:"; list_cmds
+    fi
+    exit 0
+fi
+
+[ "$JSON" = 1 ] || { echo "Ketchup file/persistence verify - $(date '+%F %T')"; echo "Mode: $([ "$LIVE" = 1 ] && echo 'LIVE/pre-install' || echo 'installed baremetal')"; }
+
+sec "Ketchup commands"
+n="$(list_cmds | grep -c . || true)"
+[ "$JSON" = 1 ] || list_cmds
+[ -n "$n" ] && [ "$n" -gt 0 ] && add PASS "$( [ "$JSON" = 1 ] && list_cmds | grep -c '"cmd"' || find /usr/local/bin /usr/bin -maxdepth 1 -iname '*ketchup*' -type f 2>/dev/null | wc -l) ketchup command(s) found on \$PATH" || add FAIL "no ketchup-* commands found on \$PATH" "Expected at least /usr/local/bin/ketchup-doctor; the airootfs overlay may not have been applied."
+
+sec "Command files"
+check_file() {
+    local path="$1" want_exec="${2:-1}"
+    if [ ! -e "$path" ]; then add FAIL "$path missing" "File does not exist."; return; fi
+    if [ ! -s "$path" ]; then add WARN "$path is empty (0 bytes)"; return; fi
+    if [ "$want_exec" = 1 ] && [ ! -x "$path" ]; then add FAIL "$path exists but is not executable" "chmod +x it, and check its profiledef.sh permissions entry is \"0:0:755\"."; return; fi
+    add PASS "$path"
+}
+for f in /usr/local/bin/ketchup-doctor /usr/local/bin/ketchup-audit /usr/local/bin/ketchup-first-login \
+         /usr/local/bin/ketchup-blue-reset-check /usr/local/bin/ketchup-blue-core /usr/local/bin/ketchup-verify \
+         /usr/local/bin/ketchup-help-bugs /usr/local/bin/ketchup-find; do
+    check_file "$f"
+done
+
+sec "Wallpaper and theme configuration"
+check_referenced_image() {
+    local src="$1" path="$2"
+    if [ -z "$path" ]; then add INFO "$src: no path set"; return; fi
+    if [ -f "$path" ]; then add PASS "$src -> $path"; else add FAIL "$src -> $path" "Referenced file does not exist. Wallpaper will silently fail to apply."; fi
+}
+NOCT_CFG="${XDG_CONFIG_HOME:-$HOME/.config}/noctalia/config.toml"
+[ -f "$NOCT_CFG" ] || NOCT_CFG="/etc/skel/.config/noctalia/config.toml"
+if [ -f "$NOCT_CFG" ]; then
+    add PASS "noctalia config found: $NOCT_CFG"
+    grep -E '^\s*(directory|path)\s*=' "$NOCT_CFG" | sed -E 's/.*=\s*"([^"]+)".*/\1/' | sort -u | while read -r p; do
+        if [ -d "$p" ]; then add PASS "noctalia wallpaper dir -> $p ($(find "$p" -maxdepth 1 -type f 2>/dev/null | wc -l) file(s))";
+        elif [ -f "$p" ]; then add PASS "noctalia wallpaper -> $p";
+        else add FAIL "noctalia config references $p" "Path does not exist."; fi
+    done
+    grep -qE '^\s*setup_wizard_enabled\s*=\s*false' "$NOCT_CFG" && add PASS "Noctalia setup/welcome wizard explicitly disabled" \
+        || add FAIL "setup_wizard_enabled is not set to false in $NOCT_CFG" "Noctalia shows its first-run wizard while this flag is not false."
+else
+    add WARN "no noctalia config.toml found" "Neither ~/.config nor /etc/skel has one; the first login shows Noctalia's setup wizard."
+fi
+NOCT_STATE="${XDG_STATE_HOME:-$HOME/.local/state}/noctalia/settings.toml"
+[ -f "$NOCT_STATE" ] || NOCT_STATE="/etc/skel/.local/state/noctalia/settings.toml"
+if [ -f "$NOCT_STATE" ]; then add PASS "noctalia settings.toml present: $NOCT_STATE"
+else add INFO "no settings.toml yet" "Created by Noctalia when a setting is changed; config.toml already disables the wizard."; fi
+
+grep -q '^\s*spawn-at-startup "noctalia"' "${XDG_CONFIG_HOME:-$HOME/.config}/niri/config.kdl" 2>/dev/null \
+    || grep -q '^\s*spawn-at-startup "noctalia"' /etc/skel/.config/niri/config.kdl 2>/dev/null \
+    && add PASS "niri autostarts noctalia" \
+    || add WARN "niri config does not autostart noctalia" "Check ~/.config/niri/config.kdl"
+
+check_referenced_image "ketchup-first-login default wallpaper" \
+    "$(sed -n 's/.*wallpaper-set \(\/[^ ]*\).*/\1/p' /usr/local/bin/ketchup-first-login 2>/dev/null | head -1)"
+
+sec "First login"
+M="${XDG_CONFIG_HOME:-$HOME/.config}/ketchup/first-login-done"
+if [ -f "$M" ]; then add PASS "first-login marker present: $M"
+else add INFO "first-login marker not present yet" "ketchup-first-login creates it on the first successful run."; fi
+if [ -f "$NOCT_STATE" ] && [ "$NOCT_STATE" = "${XDG_STATE_HOME:-$HOME/.local/state}/noctalia/settings.toml" ]; then
+    cur="$(grep -A2 '^\[wallpaper' "$NOCT_STATE" 2>/dev/null | grep -m1 'path' | sed -E 's/.*=\s*"([^"]+)".*/\1/')"
+    check_referenced_image "your current noctalia wallpaper (settings.toml)" "$cur"
+fi
+
+sec "Boot: graphical login (greetd + Noctalia Greeter)"
+grep -qE 'vt\.global_cursor_default=0' /proc/cmdline 2>/dev/null \
+    && add PASS "vt.global_cursor_default=0 active (no blinking cursor flash)" \
+    || add WARN "vt.global_cursor_default=0 not in the active kernel command line" "It belongs on the default boot entry (limine.conf.in on the live image, /etc/ketchup/boot-extra when installed)."
+if [ "$LIVE" = 1 ]; then
+    grep -qE '(^| )systemd\.condition-needs-update=0( |$)' /proc/cmdline 2>/dev/null \
+        && add PASS "systemd.condition-needs-update=0 active (no ldconfig/sysusers/hwdb rebuild at boot)" \
+        || add WARN "systemd.condition-needs-update=0 is missing from the kernel command line" "The overlay makes ConditionNeedsUpdate= true on every live boot, which adds seconds to startup. Add it to the entry in limine.conf.in."
+    grep -qE '(^| )copytoram=y( |$)' /proc/cmdline 2>/dev/null \
+        && add WARN "copytoram=y copies the whole image into RAM before boot continues" "Use copytoram=n in limine.conf.in for a faster start."
+fi
+[ -f /etc/systemd/system/plymouth-quit.service.d/ketchup-retain-splash.conf ] \
+    && add PASS "plymouth-quit override present (retains the splash until the login screen appears)" \
+    || add WARN "plymouth-quit retain-splash override missing" "Expected /etc/systemd/system/plymouth-quit.service.d/ketchup-retain-splash.conf"
+command -v greetd >/dev/null 2>&1 \
+    && add PASS "greetd is installed" \
+    || add FAIL "greetd is not installed" "There is no login screen without it. Install: sudo pacman -S greetd"
+command -v noctalia-greeter-session >/dev/null 2>&1 \
+    && add PASS "noctalia-greeter is installed (graphical login screen)" \
+    || add FAIL "noctalia-greeter-session not found" "greetd has nothing to launch. Install: sudo pacman -S noctalia-greeter (Arch extra / CachyOS repo) or paru -S noctalia-greeter-git"
+if grep -qE '^[[:space:]]*command[[:space:]]*=.*noctalia-greeter-session' /etc/greetd/config.toml 2>/dev/null; then
+    add PASS "greetd launches noctalia-greeter-session"
+else
+    add FAIL "/etc/greetd/config.toml does not launch noctalia-greeter-session" "[default_session] command must be /usr/bin/noctalia-greeter-session (not the bare noctalia-greeter binary)."
+fi
+if [ "$(systemctl is-enabled display-manager.service 2>/dev/null)" = enabled ] || [ -e /etc/systemd/system/display-manager.service ]; then
+    add PASS "display-manager.service is enabled (greetd)"
+else
+    add FAIL "no display manager enabled" "Fix: sudo systemctl enable greetd.service"
+fi
+systemctl get-default 2>/dev/null | grep -q graphical \
+    && add PASS "default.target is graphical.target (pulls in greetd)" \
+    || { [ -f /etc/systemd/system/default.target ] && grep -q '^Requires=graphical.target' /etc/systemd/system/default.target \
+         && add PASS "default.target requires graphical.target (pulls in greetd)" \
+         || add FAIL "default.target is not graphical" "Without it the login screen never starts. Fix: sudo systemctl set-default graphical.target"; }
+if grep -rqE '^\s*(\[initial_session\])' /etc/greetd/config.toml 2>/dev/null; then
+    if [ "$LIVE" = 1 ]; then
+        add INFO "greetd [initial_session] (autologin) is enabled" "The live image normally shows the login screen; autologin skips it."
+    else
+        add INFO "greetd autologin is enabled" "You skip the login screen at boot. Remove the [initial_session] block in /etc/greetd/config.toml to get it back."
+    fi
+else
+    add PASS "no autologin: you get the graphical login screen at every boot"
+fi
+if [ -d /var/lib/noctalia-greeter ]; then
+    gdir_mode="$(stat -c %a /var/lib/noctalia-greeter 2>/dev/null)"
+    gdir_owner="$(stat -c %U /var/lib/noctalia-greeter 2>/dev/null)"
+    if [ "$gdir_owner" = greeter ] && [ "$gdir_mode" = 750 ]; then
+        add PASS "greeter state dir /var/lib/noctalia-greeter is greeter:greeter 0750"
+    else
+        add WARN "greeter state dir is $gdir_owner $gdir_mode (expected greeter 750)" "A wrong owner/mode is the usual cause of a blank login screen. Fix: sudo systemd-tmpfiles --create noctalia-greeter.conf"
+    fi
+else
+    add FAIL "/var/lib/noctalia-greeter is missing" "Noctalia Greeter keeps its config and remembered scheme there. Fix: sudo systemd-tmpfiles --create noctalia-greeter.conf"
+fi
+[ -f /etc/sudoers.d/ketchup-networkmanager ] \
+    && add PASS "passwordless 'systemctl start NetworkManager' rule present (used by ~/.bash_profile)" \
+    || add WARN "/etc/sudoers.d/ketchup-networkmanager missing" "The .bash_profile line 'sudo -n systemctl start NetworkManager' will be skipped without it (NetworkManager may then only start if it is enabled)."
+
+sec "One login mechanism only (greetd), no tty/DM conflicts"
+dm_target="$(readlink -e /etc/systemd/system/display-manager.service 2>/dev/null)"
+case "$dm_target" in
+    */greetd.service) add PASS "display-manager.service -> greetd.service" ;;
+    "")               add FAIL "display-manager.service is missing" "No login screen will start. Fix: sudo systemctl enable greetd.service (or: sudo ln -sf /usr/lib/systemd/system/greetd.service /etc/systemd/system/display-manager.service)" ;;
+    *)                add FAIL "display-manager.service points at $(basename "$dm_target"), not greetd" "Only one display manager can own VT1. Fix: sudo systemctl disable \"$(basename "$dm_target")\" && sudo systemctl enable greetd.service" ;;
+esac
+other_dm=""
+for pkg in sddm gdm lightdm ly lemurs lxdm slim xorg-xdm plasma-login-manager cosmic-greeter emptty; do
+    pacman -Qq "$pkg" >/dev/null 2>&1 && other_dm="$other_dm $pkg"
+done
+[ -z "$other_dm" ] && add PASS "no other display manager installed" \
+    || add WARN "another display manager is installed:$other_dm" "Only one can own VT1. Remove it (sudo pacman -Rns$other_dm) or at least keep it disabled."
+if [ -d /etc/systemd/system/getty@tty1.service.d ] && grep -rqE 'autologin|--autologin' /etc/systemd/system/getty@tty1.service.d 2>/dev/null; then
+    add FAIL "getty@tty1 has an autologin drop-in" "It conflicts with greetd for VT1. Remove /etc/systemd/system/getty@tty1.service.d/*autologin*"
+else
+    add PASS "no getty@tty1 autologin drop-in"
+fi
+if systemctl is-active --quiet greetd.service 2>/dev/null; then
+    if systemctl is-active --quiet getty@tty1.service 2>/dev/null; then
+        add FAIL "greetd AND getty@tty1 are both active" "They share VT1. greetd.service has Conflicts=getty@tty1.service, so this means the unit was edited: check systemctl cat greetd.service"
+    else
+        add PASS "greetd is running and owns VT1 (getty@tty1 is not)"
+    fi
+else
+    add WARN "greetd is not running right now" "Expected on a normal boot. See: systemctl status greetd; journalctl -b -u greetd. tty2 is a text console (Ctrl+Alt+F2)."
+fi
+badtok=""
+for w in $(cat /proc/cmdline 2>/dev/null); do
+    case "$w" in systemd.unit=*|systemd.run=*|single|emergency|rescue|s|S|1|2|3|4|5) badtok="$badtok $w" ;; esac
+done
+[ -z "$badtok" ] && add PASS "kernel command line does not override the boot target" \
+    || add FAIL "kernel command line overrides the boot target:$badtok" "That replaces graphical.target (greetd never starts). Remove it from the Limine/GRUB entry or /etc/kernel/cmdline, then sudo ketchup-limine update"
+
+sec "NetworkManager"
+if systemctl is-enabled --quiet NetworkManager.service 2>/dev/null; then add PASS "NetworkManager.service is enabled"
+else add FAIL "NetworkManager.service is not enabled" "Fix: sudo systemctl enable --now NetworkManager.service"; fi
+if systemctl is-active --quiet NetworkManager.service 2>/dev/null; then add PASS "NetworkManager is running"
+else add WARN "NetworkManager is not running right now" "Start it: sudo systemctl start NetworkManager.service (login also does this via ~/.bash_profile)"; fi
+rival=""
+for u in systemd-networkd.service iwd.service dhcpcd.service connman.service; do
+    systemctl is-enabled --quiet "$u" 2>/dev/null && rival="$rival $u"
+done
+[ -z "$rival" ] && add PASS "no competing network manager is enabled" \
+    || add WARN "competing network service enabled:$rival" "It manages the same interfaces as NetworkManager. Disable it: sudo systemctl disable$rival"
+
+sec "Symlinks that must be symlinks"
+flat="$(find /etc/systemd/system \( -path '*.wants/*' -o -path '*.requires/*' \) -type f 2>/dev/null)"
+[ -z "$flat" ] && add PASS "no regular files in any *.wants / *.requires directory" \
+    || add FAIL "regular files where systemd needs symlinks (it ignores them)" "$(echo "$flat" | head -4 | tr '\n' ' ') - from the source tree: run tools/ensure-symlinks.sh, then rebuild"
+for l in default.target display-manager.service dbus-org.freedesktop.nm-dispatcher.service; do
+    if [ -L "/etc/systemd/system/$l" ]; then add PASS "/etc/systemd/system/$l is a symlink"
+    elif [ -e "/etc/systemd/system/$l" ]; then add FAIL "/etc/systemd/system/$l is a regular file, not a symlink" "Replace it: sudo systemctl enable/set-default, or tools/ensure-symlinks.sh in the source tree"
+    else add WARN "/etc/systemd/system/$l is missing" "Created by systemctl enable / set-default (or tools/ensure-symlinks.sh in the source tree)"; fi
+done
+
+if [ "$JSON" = 1 ]; then
+    printf '{"pass":%d,"info":%d,"warn":%d,"fail":%d,"live":%d,"results":[%s]}\n' "$NP" "$NI" "$NW" "$NF" "$LIVE" "$(IFS=,; echo "${OUT[*]}")"
+else
+    printf '\n%sSummary:%s %s%d pass%s, %d info, %s%d warn%s, %s%d fail%s\n' "$B" "$N" "$G" "$NP" "$N" "$NI" "$Y" "$NW" "$N" "$R" "$NF" "$N"
+    echo "Run 'ketchup-verify --cmds' for a plain list of every ketchup-* command and its path."
+    echo "Found an issue with logs/crashes instead of files? Run 'ketchup-help-bugs'."
+fi
+[ "$NF" -gt 0 ] && exit 1
+exit 0

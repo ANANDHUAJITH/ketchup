@@ -1,0 +1,26 @@
+#!/bin/bash
+# One-time online setup on the first boot of an installed Ketchup system.
+# Retries on every boot until the network is up and everything succeeded.
+LOG=/var/log/ketchup-firstboot.log; DONE=/var/lib/ketchup/firstboot-done
+mkdir -p /var/lib/ketchup; [ -f "$DONE" ] && exit 0
+exec >>"$LOG" 2>&1; echo "== $(date) =="
+nm-online -q -t 90 || { echo "no network yet, will retry next boot"; exit 0; }
+ok=1
+flatpak remote-add --system --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo || ok=0
+pacman -Sy --noconfirm >/dev/null 2>&1 || true
+# NVIDIA: open kernel modules for Turing and newer; older cards stay on nouveau
+gpu="$(lspci -nn | grep -Ei 'vga|3d|display' | grep -i nvidia)"
+if [ -n "$gpu" ]; then
+    if echo "$gpu" | grep -Eqi 'GTX ?(7|9|10)[0-9]{2}|GT ?(7|10)[0-9]{2}|Quadro (K|M|P)|TITAN X|MX ?[1-2][0-9]{2}'; then
+        echo "Legacy NVIDIA GPU detected; using nouveau. Newer legacy drivers are not auto-installed."
+    else
+        pacman -S --needed --noconfirm linux-zen-headers nvidia-open-dkms nvidia-utils nvidia-settings libva-nvidia-driver || ok=0
+        for rt in /run/user/*; do
+            uid="${rt##*/}"
+            runuser -u "$(id -nu "$uid")" -- env DBUS_SESSION_BUS_ADDRESS="unix:path=$rt/bus" \
+                notify-send -i ketchup-logo "Ketchup" "NVIDIA driver installed. Reboot to start using it." 2>/dev/null
+        done
+    fi
+fi
+[ $ok = 1 ] && touch "$DONE" && echo "first-boot setup finished"
+exit 0

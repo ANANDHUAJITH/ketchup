@@ -1,0 +1,65 @@
+#!/bin/bash
+# ketchup-notifyd - fetch notif.yml from the Ketchup repository and notify logged-in
+# users once per new announcement. ketchup-notify.timer runs it periodically; an
+# announcement is shown again only when its id changes.
+#
+# notif.yml format (see docs/UPDATES.md):
+#   id: 2026-11-15-01        # required, must change for a new notification to fire
+#   title: "Ketchup 27.0 is here"
+#   message: "Run 'ketchup-upgrade' to update."
+#   level: info               # info | warning | critical (maps to notify-send urgency)
+#   url: "https://..."        # optional, shown in the notification body
+#
+#   ketchup-notifyd           check once and notify if there's something new
+#   ketchup-notifyd --force   re-show the current notif.yml even if already seen
+set -u
+. /usr/lib/ketchup/notify-lib.sh
+CONF=/etc/ketchup/upgrade.conf
+# shellcheck source=/dev/null
+[ -f "$CONF" ] && . "$CONF"
+URL="${KETCHUP_NOTIFY_URL:-https://raw.githubusercontent.com/ANANDHUAJITH/ketchup/main/notif.yml}"
+FORCE=0; [ "${1:-}" = "--force" ] && FORCE=1
+
+tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
+if ! curl -fsSL --max-time 15 "$URL" -o "$tmp"; then
+    logger -t ketchup-notify "could not fetch $URL (offline, or not published yet)"
+    exit 0
+fi
+[ -s "$tmp" ] || exit 0
+
+# python-yaml is used when available; otherwise a plain "key: value" reader.
+read_field() {
+    local key="$1"
+    if command -v python3 >/dev/null && python3 -c 'import yaml' 2>/dev/null; then
+        python3 -c '
+import sys, yaml
+try:
+    d = yaml.safe_load(open(sys.argv[1])) or {}
+except Exception:
+    d = {}
+print(d.get(sys.argv[2], "") or "")
+' "$tmp" "$key"
+    else
+        sed -n "s/^${key}:[[:space:]]*//p" "$tmp" | head -n1 | sed 's/^"//; s/"$//'
+    fi
+}
+
+id="$(read_field id)"
+[ -n "$id" ] || { logger -t ketchup-notify "notif.yml has no 'id:' field, skipping"; exit 0; }
+
+if [ "$FORCE" = 0 ] && ketchup_notify_seen "$id"; then
+    exit 0
+fi
+
+title="$(read_field title)"; [ -n "$title" ] || title="Ketchup"
+message="$(read_field message)"
+level="$(read_field level)"
+url="$(read_field url)"
+[ -n "$url" ] && message="$message
+$url"
+
+urgency=normal
+case "$level" in warning) urgency=normal ;; critical) urgency=critical ;; esac
+
+ketchup_notify_send "$title" "$message" "$urgency" ketchup
+ketchup_notify_mark_seen "$id"

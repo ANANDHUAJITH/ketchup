@@ -1,0 +1,5 @@
+#!/bin/bash
+# ketchup-rollback - convenience alias for `ketchup-upgrade rollback`.
+# If a new update won't even boot, pick "Ketchup (previous system)" at the
+# boot menu instead - that alone is already a full rollback, no command needed.
+exec /usr/local/bin/ketchup-upgrade rollback "$@"

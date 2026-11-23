@@ -1,0 +1,14 @@
+# Catppuccin Mocha (https://catppuccin.com/palette)
+NAME="Catppuccin Mocha"
+BG="#1e1e2e"            # base
+BG_ALT="#313244"        # surface0 - inputs, lists
+BG_DEEP="#181825"       # mantle - sidebar, slideshow
+FG="#cdd6f4"            # text
+FG_DIM="#a6adc8"        # subtext0
+ACCENT="#cba6f7"        # mauve
+ACCENT_HOVER="#d7b9fa"
+ACCENT_PRESSED="#b48ee6"
+ACCENT_FG="#11111b"     # crust - text on accent
+BORDER="#45475a"        # surface1
+DISABLED_BG="#313244"
+DISABLED_FG="#6c7086"   # overlay0

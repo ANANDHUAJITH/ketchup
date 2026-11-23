@@ -1,0 +1,17 @@
+#!/bin/bash
+# Enable (or disable) CPU-optimised x86-64-v3 package builds from the CachyOS repos.
+[ "$EUID" -ne 0 ] && exec sudo "$0" "$@"
+conf=/etc/pacman.conf
+if [ "$1" = off ]; then
+    sed -i '/^\[cachyos-v3\]/,/^$/d;/^\[cachyos-core-v3\]/,/^$/d;/^\[cachyos-extra-v3\]/,/^$/d' $conf
+    sed -i 's/^Architecture = .*/Architecture = auto/' $conf
+    echo "x86-64-v3 repos disabled. Run: sudo pacman -Syu"; exit 0
+fi
+if ! /lib/ld-linux-x86-64.so.2 --help | grep -q 'x86-64-v3 (supported, searched)'; then
+    echo "This CPU does not support x86-64-v3; nothing changed."; exit 1
+fi
+grep -q '^\[cachyos-v3\]' $conf && { echo "Already enabled."; exit 0; }
+cp $conf $conf.bak
+sed -i 's/^Architecture = .*/Architecture = x86_64 x86_64_v3/' $conf
+sed -i '0,/^\[cachyos\]/s//[cachyos-v3]\nInclude = \/etc\/pacman.d\/cachyos-v3-mirrorlist\n\n[cachyos-core-v3]\nInclude = \/etc\/pacman.d\/cachyos-v3-mirrorlist\n\n[cachyos-extra-v3]\nInclude = \/etc\/pacman.d\/cachyos-v3-mirrorlist\n\n[cachyos]/' $conf
+echo "x86-64-v3 repos enabled (backup: $conf.bak). Run: sudo pacman -Syu"

@@ -1,0 +1,4 @@
+# Mutable greeter state, rewritten by the F7 colour-scheme picker and by Noctalia's
+# "Sync Now". This only seeds the initial scheme.
+[appearance]
+scheme = "Ayu"

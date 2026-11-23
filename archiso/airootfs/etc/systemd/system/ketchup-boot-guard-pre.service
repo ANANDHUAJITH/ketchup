@@ -1,0 +1,14 @@
+[Unit]
+Description=Ketchup boot guard: count this boot attempt, auto-rollback if a freshly-applied update never reaches a login
+DefaultDependencies=no
+After=local-fs.target
+Before=sysinit.target graphical.target multi-user.target
+ConditionPathExists=/etc/ketchup/previous-root
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/ketchup-boot-guard pre
+RemainAfterExit=no
+
+[Install]
+WantedBy=sysinit.target

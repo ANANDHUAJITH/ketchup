@@ -1,0 +1,119 @@
+#!/bin/bash
+# ketchup-post-install - runs in the target chroot after the bootloader is installed and
+# strips everything that only belongs on the live image.
+
+LOG=/var/log/ketchup-post-install.log
+: > "$LOG" 2>/dev/null || LOG=/dev/null
+
+# Enable a single unit if it exists. systemctl enable with several names fails as a
+# whole when one of them is unknown, which would leave every unit disabled.
+enable_unit() {
+    if [ -e "/usr/lib/systemd/system/$1" ] || [ -e "/etc/systemd/system/$1" ]; then
+        if systemctl enable "$1" >>"$LOG" 2>&1; then echo "enabled  $1" >>"$LOG"
+        else echo "FAILED   $1" >>"$LOG"; fi
+    else
+        echo "skipped  $1 (not installed)" >>"$LOG"
+    fi
+}
+
+# Login screen: greetd with Noctalia Greeter, as on the live image.
+# Calamares adds the autologin user to the "autologin" group but nothing consumes it
+# here, so map that group to greetd's [initial_session]. liveuser is already removed
+# at this point; the grep only guards against a leftover entry.
+AUTOLOGIN_USER="$(getent group autologin | awk -F: '{print $4}' | tr ',' '\n' | grep -vx liveuser | head -n1)"
+mkdir -p /etc/greetd /var/lib/noctalia-greeter
+cat > /etc/greetd/config.toml <<CONF
+[terminal]
+vt = 1
+
+[default_session]
+command = "env WLR_RENDERER_ALLOW_SOFTWARE=1 /usr/bin/noctalia-greeter-session"
+user = "greeter"
+CONF
+if [ -n "$AUTOLOGIN_USER" ] && id "$AUTOLOGIN_USER" >/dev/null 2>&1; then
+    cat >> /etc/greetd/config.toml <<CONF
+
+[initial_session]
+command = "niri-session"
+user = "${AUTOLOGIN_USER}"
+CONF
+fi
+# The live greeter.toml preselects liveuser, allows an empty password and pins a
+# wallpaper. None of that applies to an installed system, and a pinned wallpaper
+# would stop Noctalia's "Sync Now" from copying the user's own.
+cat > /var/lib/noctalia-greeter/greeter.toml <<CONF
+# Noctalia Greeter administrator settings.
+# https://docs.noctalia.dev/greeter/configuration/
+[clock]
+enabled = true
+CONF
+chmod 644 /var/lib/noctalia-greeter/greeter.toml /etc/greetd/config.toml
+rm -f /etc/systemd/system/getty@tty1.service.d/autologin.conf /etc/systemd/system/default.target
+rmdir /etc/systemd/system/getty@tty1.service.d 2>/dev/null
+
+# Live-only files.
+rm -f /etc/systemd/system/pacman-init.service \
+      /etc/systemd/system/multi-user.target.wants/pacman-init.service \
+      /etc/systemd/logind.conf.d/do-not-suspend.conf \
+      /etc/polkit-1/rules.d/49-nopasswd_global.rules \
+      /etc/sudoers.d/g_wheel /etc/motd /etc/ssh/sshd_config.d/10-archiso.conf \
+      /etc/subuid /etc/subgid /etc/version-tag /etc/edition-tag \
+      /usr/share/applications/ketchup-install.desktop \
+      /etc/tmpfiles.d/ketchup-liveuser.conf \
+      /usr/local/bin/ketchup-install /usr/local/bin/ketchup-installer-theme \
+      /usr/local/bin/ketchup-pre-initramfs
+rm -rf /etc/calamares /usr/share/calamares /usr/share/ketchup/calamares /usr/share/ketchup/installer-themes \
+       /usr/lib/ketchup-compat /etc/ld.so.conf.d/ketchup-compat.conf /etc/skel/Desktop \
+       /etc/skel/.config/{niri,noctalia,systemd}/*.bak
+# Persistent, size-limited journal instead of the live image's volatile one.
+printf '[Journal]\nSystemMaxUse=200M\n' > /etc/systemd/journald.conf.d/volatile-storage.conf
+# The live image ships an empty root password; lock it (administration goes through sudo).
+passwd -l root >/dev/null 2>&1
+
+pacman-key --init >/dev/null 2>&1 && pacman-key --populate archlinux cachyos >/dev/null 2>&1
+# The live image trusts the CachyOS repository without signatures so it can be built;
+# an installed system verifies them once the keyring is populated.
+if pacman-key --list-keys 2>/dev/null | grep -qi cachyos; then
+    sed -i '/^\[cachyos\]/,/^$/ s/^SigLevel.*/SigLevel = Required DatabaseOptional/' /etc/pacman.conf
+fi
+
+# Seed the persistent asset directory without overwriting anything already there.
+mkdir -p /var/lib/ketchup/assets/wallpapers
+for f in /usr/share/backgrounds/ketchup/*.jpg /usr/share/backgrounds/ketchup/*.png; do
+    [ -f "$f" ] || continue
+    dest="/var/lib/ketchup/assets/wallpapers/$(basename "$f")"
+    [ -f "$dest" ] || cp "$f" "$dest"
+done
+
+# greetd is the display manager: graphical.target pulls in display-manager.service.
+# The symlinks are created explicitly in case systemctl cannot do it inside the chroot.
+enable_unit greetd.service
+systemctl set-default graphical.target >>"$LOG" 2>&1
+[ "$(readlink -f /etc/systemd/system/default.target 2>/dev/null)" = /usr/lib/systemd/system/graphical.target ] \
+    || ln -sfn /usr/lib/systemd/system/graphical.target /etc/systemd/system/default.target
+[ -e /etc/systemd/system/display-manager.service ] \
+    || ln -sfn /usr/lib/systemd/system/greetd.service /etc/systemd/system/display-manager.service
+
+# The plymouth package does not add its hook to mkinitcpio.conf, and Calamares writes
+# HOOKS without it. Insert it after udev (or systemd) and rebuild the initramfs.
+if [ -f /etc/mkinitcpio.conf ] && ! grep -qE '^HOOKS=.*\bplymouth\b' /etc/mkinitcpio.conf; then
+    sed -i -E 's/^(HOOKS=\([^)]*\b(udev|systemd)\b)/\1 plymouth/' /etc/mkinitcpio.conf
+    grep -qE '^HOOKS=.*\bplymouth\b' /etc/mkinitcpio.conf && mkinitcpio -P >/dev/null 2>&1
+fi
+
+/usr/local/bin/ketchup-limine update >/dev/null 2>&1 || true
+pacman -Rns --noconfirm cachyos-calamares-next mkinitcpio-archiso >/dev/null 2>&1
+
+for u in NetworkManager.service ketchup-firstboot.service reflector.timer \
+         ketchup-notify.timer ketchup-upgrade-check.timer \
+         ketchup-boot-guard-pre.service ketchup-boot-guard-post.service; do
+    enable_unit "$u"
+done
+if [ ! -e /etc/systemd/system/multi-user.target.wants/NetworkManager.service ]; then
+    mkdir -p /etc/systemd/system/multi-user.target.wants
+    ln -sf /usr/lib/systemd/system/NetworkManager.service /etc/systemd/system/multi-user.target.wants/NetworkManager.service
+    echo "fallback symlink for NetworkManager.service" >>"$LOG"
+fi
+[ -e /etc/systemd/system/dbus-org.freedesktop.nm-dispatcher.service ] \
+    || ln -sf /usr/lib/systemd/system/NetworkManager-dispatcher.service /etc/systemd/system/dbus-org.freedesktop.nm-dispatcher.service
+exit 0

@@ -1,0 +1,56 @@
+#!/bin/bash
+# ketchup-blue-apps - a disposable container for "blue-only" software, built on
+# Distrobox so it never touches your real system and is one command to delete.
+#   ketchup-blue-apps create            make the sandbox (once)
+#   ketchup-blue-apps enter             open a shell inside it
+#   ketchup-blue-apps install PKG...    pacman-install packages inside it
+#   ketchup-blue-apps run CMD...        run one command inside it
+#   ketchup-blue-apps list              show what's installed in it
+#   ketchup-blue-apps wipe              delete the sandbox and everything in it
+set -u
+source /usr/local/bin/ketchup-blue-core
+
+BOX=ketchup-blue
+IMAGE=archlinux:latest
+
+need_distrobox() {
+    command -v distrobox >/dev/null || ketchup_blue_die "distrobox isn't installed."
+}
+
+exists() { distrobox list --no-color 2>/dev/null | awk -F'|' 'NR>1{gsub(/ /,"",$2); print $2}' | grep -qx "$BOX"; }
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+    create)
+        ketchup_blue_require; need_distrobox
+        exists && { echo "Already exists. Use: ketchup-blue-apps enter"; exit 0; }
+        distrobox create -n "$BOX" -i "$IMAGE" --yes
+        echo "Created. Install something with: ketchup-blue-apps install <package>" ;;
+    enter)
+        ketchup_blue_require; need_distrobox
+        exists || ketchup_blue_die "no sandbox yet. Run: ketchup-blue-apps create"
+        exec distrobox enter "$BOX" ;;
+    install)
+        ketchup_blue_require; need_distrobox
+        exists || ketchup_blue_die "no sandbox yet. Run: ketchup-blue-apps create"
+        [ "$#" -ge 1 ] || ketchup_blue_die "give at least one package: ketchup-blue-apps install firefox"
+        distrobox enter "$BOX" -- sudo pacman -Sy --noconfirm "$@" ;;
+    run)
+        ketchup_blue_require; need_distrobox
+        exists || ketchup_blue_die "no sandbox yet. Run: ketchup-blue-apps create"
+        [ "$#" -ge 1 ] || ketchup_blue_die "give a command: ketchup-blue-apps run firefox"
+        distrobox enter "$BOX" -- "$@" ;;
+    list)
+        need_distrobox
+        exists || { echo "No sandbox yet."; exit 0; }
+        distrobox enter "$BOX" -- pacman -Qe ;;
+    wipe)
+        need_distrobox
+        exists || { echo "Nothing to wipe."; exit 0; }
+        read -r -p "Permanently delete the ketchup-blue sandbox and everything installed in it? [y/N] " a
+        [ "${a,,}" = y ] || { echo "Cancelled."; exit 0; }
+        distrobox rm -f "$BOX"
+        echo "Sandbox deleted." ;;
+    -h|--help|help|"") sed -n '2,9p' "$0" ;;
+    *) ketchup_blue_die "unknown command '$cmd' (try: ketchup-blue-apps --help)" ;;
+esac

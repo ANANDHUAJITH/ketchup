@@ -1,0 +1,115 @@
+#!/bin/bash
+# ketchup-man - the manual for every Ketchup command, in one place.
+#
+#   ketchup-man                 show the FULL manual for every ketchup command
+#   ketchup-man <command>       show just that command's manual
+#   ketchup-man <cmd1> <cmd2>   show manuals for several commands, in order
+#   ketchup-man -l              short one-line list instead (name + what it does)
+#   ketchup-man -k <word>       search command names/descriptions for a keyword
+#
+# The manual of a command is the comment block at the top of its script, the same text
+# that `<command> --help` prints for commands that support it.
+set -u
+PAGE=0; [ -t 1 ] && PAGE=1
+
+usage() { sed -n '2,9p' "$0"; }
+
+# every *ketchup* executable on this system
+find_cmds() {
+    for d in /usr/local/bin /usr/local/sbin /usr/bin; do
+        [ -d "$d" ] || continue
+        find "$d" -maxdepth 1 -iname '*ketchup*' -type f -perm -u+x 2>/dev/null
+    done | xargs -r -I{} basename {} | sort -u
+}
+
+# a command's manual: the leading comment block of a shell script, or the module
+# docstring of a Python script (ketchup-lens)
+manual_of() {
+    local cmd="$1" path
+    path="$(command -v -- "$cmd" 2>/dev/null)"
+    if [ -z "$path" ]; then
+        echo "No such command: $cmd" >&2
+        return 1
+    fi
+    if [[ "$(head -1 "$path")" == *python* ]] && command -v python3 >/dev/null 2>&1; then
+        python3 -c '
+import ast, sys
+try:
+    doc = ast.get_docstring(ast.parse(open(sys.argv[1]).read()))
+except Exception:
+    doc = None
+print(doc or "")' "$path"
+    else
+        awk 'NR==1 && /^#!/ {next} /^#/ {sub(/^# ?/,""); print; next} {exit}' "$path"
+    fi
+}
+
+# one-line description: every manual starts with "name - description". Join the manual
+# into one paragraph, drop the "name - " prefix and cut at the end of the first sentence.
+desc_of() {
+    local cmd="$1" joined stripped window first
+    joined="$(manual_of "$cmd" 2>/dev/null | tr '\n' ' ' | sed -E 's/ +/ /g; s/^ +//; s/ +$//')"
+    stripped="$(printf '%s' "$joined" | sed -E 's/^[^ ]+ *[-:] *//')"
+    window="${stripped:0:200}"
+    # a sentence ends at '.', '!' or '?' followed by a space or the end of the window,
+    # which excludes file extensions and decimals
+    first="$(printf '%s' "$window" | awk '{
+        n = length($0); found = 0
+        for (i = 1; i <= n; i++) {
+            c = substr($0, i, 1)
+            if (c == "." || c == "!" || c == "?") {
+                nc = substr($0, i + 1, 1)
+                if (nc == "" || nc == " ") { print substr($0, 1, i); found = 1; break }
+            }
+        }
+        if (!found) print ""
+    }')"
+    if [ -n "$first" ]; then printf '%s\n' "$first"; else printf '%.100s...\n' "$stripped"; fi
+}
+
+print_manual() {
+    local cmd="$1" body
+    body="$(manual_of "$cmd")" || return 1
+    printf '%s\n%s\n%s\n\n' "============================================================" "$cmd" "============================================================"
+    printf '%s\n\n' "$body"
+}
+
+ALL_CMDS="$(find_cmds)"
+[ -z "$ALL_CMDS" ] && { echo "No ketchup-* commands found on \$PATH." >&2; exit 1; }
+
+case "${1:-}" in
+    -h|--help) usage; exit 0 ;;
+    -l|--list)
+        out="$(for c in $ALL_CMDS; do printf '%-26s %s\n' "$c" "$(desc_of "$c")"; done)"
+        if [ "$PAGE" = 1 ]; then echo "$out" | "${PAGER:-less}" -F; else echo "$out"; fi
+        exit 0
+        ;;
+    -k|--search)
+        word="${2:-}"
+        if [ -z "$word" ]; then echo "Usage: ketchup-man -k <word>" >&2; exit 1; fi
+        matched=0
+        for c in $ALL_CMDS; do
+            if printf '%s %s' "$c" "$(desc_of "$c")" | grep -qi -- "$word"; then
+                printf '%-26s %s\n' "$c" "$(desc_of "$c")"
+                matched=1
+            fi
+        done
+        [ "$matched" = 0 ] && { echo "No command or description matches \"$word\"." >&2; exit 1; }
+        exit 0
+        ;;
+    "")
+        out="$(for c in $ALL_CMDS; do print_manual "$c"; done)"
+        ;;
+    *)
+        out=""
+        status=0
+        for c in "$@"; do
+            # $(...) strips the trailing blank line, so add the separator back
+            m="$(print_manual "$c")" || { status=1; continue; }
+            out="${out}${m}"$'\n\n'
+        done
+        [ -z "$out" ] && exit "$status"
+        ;;
+esac
+
+if [ "$PAGE" = 1 ]; then printf '%s' "$out" | "${PAGER:-less}" -F; else printf '%s' "$out"; fi

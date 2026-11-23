@@ -1,0 +1,16 @@
+# Ayu Dark - the palette behind Noctalia's built-in "Ayu" scheme
+# (terminal bg #0b0e14 / fg #bfbdb6 / cursor #e6b450 in Noctalia's Ayu assets;
+#  panel #0f131a from https://github.com/ayu-theme/vscode-ayu). Dark, no pure white.
+NAME="Ayu Dark"
+BG="#0b0e14"            # ui.bg
+BG_ALT="#171c26"        # raised: inputs, lists (ui.bg lifted a step so fields read as fields)
+BG_DEEP="#0f131a"       # ui.panel.bg - sidebar, slideshow
+FG="#bfbdb6"            # syntax.fg
+FG_DIM="#8a8f98"
+ACCENT="#e6b450"        # common.accent
+ACCENT_HOVER="#edc66d"
+ACCENT_PRESSED="#cf9f3c"
+ACCENT_FG="#0b0e14"     # text on accent
+BORDER="#273040"
+DISABLED_BG="#171c26"
+DISABLED_FG="#565b66"   # ui.fg

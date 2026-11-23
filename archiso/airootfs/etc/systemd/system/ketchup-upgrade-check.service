@@ -1,0 +1,9 @@
+[Unit]
+Description=Check for Ketchup package/train updates (read-only, installs nothing)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/usr/local/bin/ketchup-upgrade
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/ketchup-upgrade check --auto
