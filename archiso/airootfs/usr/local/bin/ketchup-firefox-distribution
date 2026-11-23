@@ -1,0 +1,24 @@
+#!/bin/bash
+# Writes Firefox's distribution.ini so first launch opens the Ketchup website.
+# Run from /usr/share/libalpm/hooks/97-ketchup-firefox-distribution.hook, PostTransaction
+# on install/upgrade of the firefox package, since a file shipped directly in airootfs at
+# this path conflicts with pacman's own firefox file list during pacstrap (FS#49347-style).
+# This only sets the default home page / first-run tab; it is a normal, user-changeable
+# preference, not a locked enterprise policy.
+set -e
+dir=/usr/lib/firefox/distribution
+mkdir -p "$dir"
+cat > "$dir/distribution.ini" << 'EOF'
+; Ketchup Linux Firefox distribution customization.
+[Global]
+id=ketchup
+version=1.0
+about=Ketchup Linux (https://github.com/ANANDHUAJITH/ketchup)
+
+[Preferences]
+browser.startup.homepage="https://anandhuajith.github.io/ketchup-web/"
+browser.startup.homepage_override.mstone=ignore
+startup.homepage_welcome_url="https://anandhuajith.github.io/ketchup-web/"
+startup.homepage_welcome_url.additional=""
+browser.startup.page=1
+EOF

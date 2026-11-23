@@ -1,0 +1,11 @@
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = firefox
+
+[Action]
+Description = Setting Ketchup's Firefox first-run home page...
+When = PostTransaction
+Depends = bash
+Exec = /usr/local/bin/ketchup-firefox-distribution

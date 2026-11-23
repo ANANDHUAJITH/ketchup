@@ -30,6 +30,7 @@ file_permissions=(
   ["/usr/local/bin/ketchup-apps-location"]="0:0:755"
   ["/usr/local/bin/ketchup-first-login"]="0:0:755"
   ["/usr/local/bin/ketchup-mirrors"]="0:0:755"
+  ["/usr/local/bin/ketchup-firefox-distribution"]="0:0:755"
   ["/usr/local/bin/ketchup-v3"]="0:0:755"
   ["/usr/local/bin/ketchup-doctor"]="0:0:755"
   ["/usr/local/bin/ketchup-lab"]="0:0:755"
