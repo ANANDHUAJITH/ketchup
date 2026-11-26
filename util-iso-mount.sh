@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2154,SC2034  # variables are set by buildiso.sh
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -10,7 +11,7 @@
 # GNU General Public License for more details.
 
 umount_img() {
-    if [[ -n ${IMG_ACTIVE_MOUNTS[@]} ]]; then
+    if (( ${#IMG_ACTIVE_MOUNTS[@]} )); then
         info "umount: [%s]" "${IMG_ACTIVE_MOUNTS[@]}"
         sudo umount "${IMG_ACTIVE_MOUNTS[@]}"
         unset IMG_ACTIVE_MOUNTS
@@ -25,7 +26,7 @@ check_umount() {
 }
 
 umount_fs(){
-    if [[ -n ${FS_ACTIVE_MOUNTS[@]} ]]; then
+    if (( ${#FS_ACTIVE_MOUNTS[@]} )); then
         info "overlayfs umount: [%s]" "${FS_ACTIVE_MOUNTS[@]}"
         for i in "${FS_ACTIVE_MOUNTS[@]}"
         do

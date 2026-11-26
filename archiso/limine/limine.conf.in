@@ -9,6 +9,9 @@
 #   systemd.condition-needs-update=0    skip the ldconfig / sysusers / hwdb rebuild that the
 #                                       overlay would otherwise trigger on every boot
 #   noirqdebug                          never let the kernel disable an IRQ reported as "nobody cared"
+#   cow_label=KETCHUP_PERSIST           only on the persistent entry: store the overlay on the
+#                                       partition made by ketchup-persist. Never add it to the
+#                                       other entries, boot stops if the partition is missing.
 
 timeout: 2
 default_entry: 1
@@ -26,6 +29,14 @@ term_background: 40000000
 @MICROCODE@
     module_path: boot():/%INSTALL_DIR%/boot/%ARCH%/initramfs-linux-zen.img
     cmdline: archisobasedir=%INSTALL_DIR% archisolabel=%ISO_LABEL% cow_spacesize=4G copytoram=n module_blacklist=pcspkr nvme_load=yes noirqdebug systemd.condition-needs-update=0 quiet splash loglevel=3 vt.global_cursor_default=0
+
+/Ketchup persistent (keeps files and settings)
+    comment: Needs the partition made by "ketchup-persist create". Use the default entry until then.
+    protocol: linux
+    path: boot():/%INSTALL_DIR%/boot/%ARCH%/vmlinuz-linux-zen
+@MICROCODE@
+    module_path: boot():/%INSTALL_DIR%/boot/%ARCH%/initramfs-linux-zen.img
+    cmdline: archisobasedir=%INSTALL_DIR% archisolabel=%ISO_LABEL% cow_label=KETCHUP_PERSIST copytoram=n module_blacklist=pcspkr nvme_load=yes noirqdebug systemd.condition-needs-update=0 quiet splash loglevel=3 vt.global_cursor_default=0
 
 /Ketchup safe graphics (nomodeset)
     comment: Use this when the screen stays black or garbled.

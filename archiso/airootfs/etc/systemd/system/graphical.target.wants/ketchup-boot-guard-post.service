@@ -1,1 +1,11 @@
-../ketchup-boot-guard-post.service
+[Unit]
+Description=Ketchup boot guard: a graphical session came up, confirm this update as good
+After=graphical.target
+ConditionPathExists=/etc/ketchup/previous-root
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/ketchup-boot-guard post
+
+[Install]
+WantedBy=graphical.target

@@ -25,7 +25,8 @@ jobs:
       - name: ShellCheck (warnings and errors)
         run: |
           # ketchup-lens is Python; the other commands are shell scripts
-          shellcheck -S warning -s bash ci-build.sh \
+          shellcheck -S warning -s bash ci-build.sh buildiso.sh util.sh util-iso.sh util-iso-mount.sh util-msg.sh \
+            tools/build-aur-packages.sh tools/test-persist.sh tools/test-installed-boot.sh tools/test-notify.sh \
             $(ls archiso/airootfs/usr/local/bin/ketchup-* | grep -v ketchup-lens) \
             archiso/airootfs/usr/local/bin/mythical-blue-ketchup \
             archiso/airootfs/usr/local/bin/the-legacy-red-ketchup \
@@ -42,10 +43,24 @@ jobs:
           entries=$(grep -c '^ *cmdline:' "$conf")
           [ "$(grep -c '^ *cmdline:.*copytoram=n' "$conf")" = "$entries" ] || { echo "::error::every Limine entry needs copytoram=n"; exit 1; }
           [ "$(grep -c '^ *cmdline:.*systemd.condition-needs-update=0' "$conf")" = "$entries" ] || { echo "::error::every Limine entry needs systemd.condition-needs-update=0"; exit 1; }
+          # Persistence: only the dedicated entry may carry cow_label (boot stops if the partition is missing)
+          first="$(grep -m1 '^ *cmdline:' "$conf")"
+          case "$first" in *cow_label*) echo "::error::the default Limine entry must not use cow_label"; exit 1;; esac
+          [ "$(grep -c '^ *cmdline:.*cow_label=KETCHUP_PERSIST ' "$conf")" = 1 ] || { echo "::error::expected exactly one persistent Limine entry with cow_label=KETCHUP_PERSIST"; exit 1; }
+          [ "$(grep -c '^ *cmdline:.*cow_label=' "$conf")" = 1 ] || { echo "::error::cow_label found in more than one Limine entry"; exit 1; }
       - name: Python + simulator tests (ketchup-lens, KetchupVM)
         run: |
           python3 -m py_compile archiso/airootfs/usr/local/bin/ketchup-lens tools/make-assets.py
           node tools/test-kvm.js
+      - name: Persistence partition planning
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xorriso dosfstools
+          tools/test-persist.sh
+      - name: Installed system never gets persistence or live options
+        run: tools/test-installed-boot.sh
+      - name: Notification id cannot escape its state directory
+        run: tools/test-notify.sh
       - name: YAML sanity (Calamares configs)
         run: |
           python3 -m pip install --quiet pyyaml
@@ -114,6 +129,31 @@ jobs:
               echo "    cat $iso.part* > $iso"
               echo "    sha256sum -c $iso.sha256"
             } >> ../release-notes.md
+          fi
+
+      - name: Checksums and signature
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          cd out/desktop
+          cat ./*.sha256 > SHA256SUMS
+          {
+            echo
+            echo "All files are listed in \`SHA256SUMS\`: \`sha256sum -c SHA256SUMS --ignore-missing\`"
+          } >> ../release-notes.md
+          if [ -n "$GPG_PRIVATE_KEY" ]; then
+            export GNUPGHOME; GNUPGHOME="$(mktemp -d)"
+            printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --quiet --import
+            gpg --batch --yes --pinentry-mode loopback --passphrase "${GPG_PASSPHRASE:-}" \
+                --armor --detach-sign --output SHA256SUMS.asc SHA256SUMS
+            gpg --batch --armor --export > signing-key.asc
+            {
+              echo "\`SHA256SUMS\` is signed: \`gpg --import signing-key.asc && gpg --verify SHA256SUMS.asc SHA256SUMS\`"
+              echo "Signing key fingerprint: \`$(gpg --batch --with-colons --fingerprint | awk -F: '/^fpr/ {print $10; exit}')\`"
+            } >> ../release-notes.md
+          else
+            echo "::notice::GPG_PRIVATE_KEY is not set: this release has checksums but no signature"
           fi
 
       - name: Remove previous nightly release

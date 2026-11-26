@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2154,SC2034  # variables are set by buildiso.sh
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -139,23 +140,13 @@ generate_edition_tag() {
     echo "${_edition}" > ${src_dir}/archiso/airootfs/etc/edition-tag
 }
 
-modify_mkarchiso() {
-    local _is_hack_applied="$(grep -q 'archlinux-keyring-wkd-sync.timer' /usr/bin/mkarchiso; echo $?)"
-    if [ $_is_hack_applied -ne 0 ]; then
-        msg "Patching mkarchiso with disabled arch keyrings timer..."
-
-        sudo sed 's/_run_once _make_customize_airootfs/_run_once _make_customize_airootfs\n\trm -f "${pacstrap_dir}\/usr\/lib\/systemd\/system\/timers.target.wants\/archlinux-keyring-wkd-sync.timer"\n/' -i /usr/bin/mkarchiso
-    else
-        msg "mkarchiso is already patched!"
-    fi
-}
-
 prepare_profile(){
     profile=$1
 
     info "Profile: [%s]" "${profile}"
 
-    local _iso_version="$(date +%y%m%d)"
+    local _iso_version
+    _iso_version="$(date +%y%m%d)"
     change_grub_version "${_iso_version}"
 
     fetch_cachyos_mirrorlist
@@ -268,11 +259,6 @@ run_build() {
 
     msg "Prepare [work: ${work_dir}, out: ${outFolder}]"
 
-    if $verbose; then
-        msg2 "Making mkarchiso verbose"
-        sudo sed -i 's/quiet="y"/quiet="n"/g' /usr/bin/mkarchiso
-    fi
-
     if $clean_first; then
         msg2 "Deleting the build folder if one exists - takes some time"
         umount_fs
@@ -285,7 +271,8 @@ run_build() {
 
     msg "Start [Build ISO]"
 
-    modify_mkarchiso
+    # archlinux-keyring-wkd-sync.timer is masked in airootfs (etc/systemd/system), so
+    # mkarchiso on the host is used as installed.
 
     [ -d "$outFolder/$_profile" ] || mkdir -p "$outFolder/$_profile"
     cd ${work_dir}/archiso/
@@ -319,7 +306,7 @@ run_build() {
             info "signature file for [$f] already created"
         fi
     done
-    show_elapsed_time "${FUNCNAME}" "${timer_start}"
+    show_elapsed_time "${FUNCNAME[0]}" "${timer_start}"
     if [[ "$build_in_ram" == "true" && "$remove_build_dir" == "false" ]]; then
         msg "!!! Remember to remove $work_dir !!!"
         msg2 "sudo rm -rf $work_dir"
@@ -340,7 +327,7 @@ gen_iso_fn(){
     vars+=("linux")
     vars+=("$(date +%y%m%d)")
 
-    for n in ${vars[@]}; do
+    for n in "${vars[@]}"; do
         name=${name:-}${name:+-}${n}
     done
 

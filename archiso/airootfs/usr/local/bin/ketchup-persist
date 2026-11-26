@@ -1,0 +1,221 @@
+#!/bin/bash
+# ketchup-persist - keep files and settings across reboots on a live USB stick.
+#
+#   ketchup-persist status                    show the boot medium and the persistence state
+#   ketchup-persist create [--size SIZE]      make the persistence partition in the free space
+#                          [--yes] [--dry-run]  after the ISO (default: all of it; SIZE like 8G, 4096M)
+#   ketchup-persist reset [--yes]             erase the saved data (boot a non-persistent entry first)
+#
+# The partition is ext4 with the label KETCHUP_PERSIST. Boot the "Ketchup persistent" menu
+# entry to use it; the other entries never touch it. See /usr/share/doc/ketchup/PERSISTENCE.md.
+
+LABEL="KETCHUP_PERSIST"
+BOOTMNT="/run/archiso/bootmnt"
+MIN_MIB=512
+ALIGN=2048          # 1 MiB in 512-byte sectors
+GPT_TAIL=34         # sectors the backup GPT needs at the end of the disk
+
+die() { echo "ketchup-persist: $*" >&2; exit 1; }
+say() { echo "ketchup-persist: $*"; }
+
+usage() { sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; }
+
+align_up()   { echo $(( ($1 + ALIGN - 1) / ALIGN * ALIGN )); }
+align_down() { echo $(( $1 / ALIGN * ALIGN )); }
+
+disk_sectors() {
+    if [ -b "$1" ]; then blockdev --getsz "$1"; else echo $(( $(stat -c %s "$1") / 512 )); fi
+}
+
+# First sector after the last partition in the table.
+partitions_end() {
+    sfdisk -d "$1" 2>/dev/null | awk '
+        /start=/ {
+            s = $0; sub(/.*start= */, "", s); sub(/,.*/, "", s)
+            z = $0; sub(/.*size= */, "", z); sub(/,.*/, "", z)
+            if (s + z > m) m = s + z
+        }
+        END { print m + 0 }'
+}
+
+# First sector after the ISO9660 image on the boot partition.
+iso_end() {
+    local disk="$1" src="$2" start=0 bytes
+    if [ "$src" != "$disk" ] && [ -r "/sys/class/block/${src##*/}/start" ]; then
+        start=$(< "/sys/class/block/${src##*/}/start")
+    fi
+    bytes=$(isosize "$src" 2>/dev/null) || bytes=0
+    echo $(( start + (bytes + 511) / 512 ))
+}
+
+# plan DISK ISO_END_SECTOR [SIZE_SECTORS]  ->  "START SIZE" in sectors
+plan() {
+    local disk="$1" isoend="$2" want="${3:-}" tabend start total avail
+    tabend=$(partitions_end "$disk")
+    start=$(align_up $(( isoend > tabend ? isoend : tabend )))
+    total=$(disk_sectors "$disk")
+    avail=$(align_down $(( total - start - GPT_TAIL )))
+    [ "$avail" -gt 0 ] || avail=0
+    if [ -n "$want" ]; then
+        [ "$want" -le "$avail" ] || die "only $(( avail / 2048 )) MiB are free after the ISO, $(( want / 2048 )) MiB requested"
+        avail=$want
+    fi
+    echo "$start $avail"
+}
+
+parse_size() {
+    local v="$1" n u
+    [[ "$v" =~ ^([0-9]+)([MmGg])([Ii]?[Bb])?$ ]] || die "bad size '$v' (use for example 4096M or 8G)"
+    n="${BASH_REMATCH[1]}"; u="${BASH_REMATCH[2]}"
+    case "$u" in [Mm]) echo $(( n * 2048 )) ;; *) echo $(( n * 2048 * 1024 )) ;; esac
+}
+
+boot_source() {
+    findmnt -no SOURCE "$BOOTMNT" 2>/dev/null
+}
+
+boot_disk() {
+    local src="$1" parent
+    parent=$(lsblk -no PKNAME "$src" 2>/dev/null | head -n1)
+    if [ -n "$parent" ]; then echo "/dev/$parent"; else echo "$src"; fi
+}
+
+check_medium() {
+    SRC=$(boot_source) || true
+    [ -n "$SRC" ] || die "this only works from the live USB stick ($BOOTMNT is not mounted)"
+    case "$SRC" in
+        /dev/sr*|/dev/loop*|/dev/mapper/*|/dev/dm-*)
+            die "booted from $SRC: persistence needs the ISO written to a USB stick or disk (dd, balenaEtcher, KDE ISO Image Writer). Ventoy has its own persistence plugin." ;;
+    esac
+    DISK=$(boot_disk "$SRC")
+    [ -b "$DISK" ] || die "cannot find the disk behind $SRC"
+}
+
+persistent_session() { grep -qw "cow_label=$LABEL" /proc/cmdline; }
+
+# Every partition on the system carrying the label.
+labelled_partitions() { lsblk -nrpo NAME,LABEL 2>/dev/null | awk -v l="$LABEL" '$2 == l { print $1 }'; }
+
+# The labelled partition on the boot disk only. status and reset never touch another disk.
+persist_partition() {
+    local p
+    for p in $(labelled_partitions); do
+        [ "$(boot_disk "$p")" = "$DISK" ] && { echo "$p"; return 0; }
+    done
+    return 1
+}
+
+# Boot stops at a rescue shell or picks the wrong device when several partitions share the
+# label, and the one picked becomes the root overlay, so warn about every foreign one.
+warn_foreign_label() {
+    local p
+    for p in $(labelled_partitions); do
+        [ "$(boot_disk "$p")" = "$DISK" ] || say "warning: $p on another disk also has the label $LABEL; remove that device before booting the persistent entry"
+    done
+}
+
+confirm() {
+    [ "$YES" = 1 ] && return 0
+    local a
+    read -r -p "$1 [y/N] " a
+    [[ "$a" =~ ^[Yy]$ ]]
+}
+
+as_root() {
+    [ "$(id -u)" -eq 0 ] && return 0
+    exec sudo -- "$0" "${ARGS[@]}"
+}
+
+cmd_status() {
+    check_medium
+    local part
+    part=$(persist_partition)
+    echo "Boot medium:           $DISK ($(lsblk -dno SIZE,MODEL "$DISK" 2>/dev/null | sed 's/  */ /g'))"
+    if [ -n "$part" ]; then
+        echo "Persistence partition: $part ($(lsblk -no SIZE,FSTYPE "$part" | head -n1 | sed 's/  */ /g'))"
+    else
+        echo "Persistence partition: none (run: ketchup-persist create)"
+    fi
+    warn_foreign_label
+    if persistent_session; then
+        echo "This session:          persistent"
+        findmnt -no SIZE,USED,AVAIL,USE% /run/archiso/cowspace 2>/dev/null | awk '{print "Space (size/used/free/use): "$0}'
+    else
+        echo "This session:          not persistent (pick the \"Ketchup persistent\" boot entry)"
+    fi
+}
+
+cmd_create() {
+    local size_arg="" start size n part layout
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --size) [ $# -ge 2 ] || die "--size needs a value"; size_arg=$(parse_size "$2") || exit 1; shift ;;
+            --yes|-y) YES=1 ;;
+            --dry-run|-n) DRY=1 ;;
+            *) die "unknown option '$1' (see ketchup-persist --help)" ;;
+        esac
+        shift
+    done
+    [ "$DRY" = 1 ] || as_root
+    check_medium
+    [ -z "$(labelled_partitions)" ] || die "a partition labelled $LABEL already exists ($(labelled_partitions | head -n1)); remove it first"
+
+    layout=$(plan "$DISK" "$(iso_end "$DISK" "$SRC")" "$size_arg") || exit 1
+    read -r start size <<< "$layout"
+    [ "$size" -ge $(( MIN_MIB * 2048 )) ] || die "only $(( size / 2048 )) MiB are free after the ISO (need at least $MIN_MIB MiB). Use a larger stick."
+
+    say "disk:      $DISK"
+    say "new partition: start sector $start, $(( size / 2048 )) MiB, ext4, label $LABEL"
+    [ "$DRY" = 1 ] && { say "dry run, nothing written"; return 0; }
+    confirm "Create it now? The ISO and existing partitions are not changed." || die "cancelled"
+
+    printf 'start=%s, size=%s, type=L\n' "$start" "$size" | sfdisk --append --quiet "$DISK" \
+        || die "sfdisk failed, the partition table was not changed"
+    udevadm settle
+    part=$(sfdisk -d "$DISK" | awk -v s="$start" '$0 ~ ("start= *" s ",") { print $1; exit }')
+    [ -n "$part" ] || die "the new partition was not found in the table"
+    for n in 1 2 3 4 5 6 7 8 9 10; do [ -b "$part" ] && break; partx -a "$DISK" 2>/dev/null; udevadm settle; sleep 1; done
+    [ -b "$part" ] || die "$part did not appear; reboot and run ketchup-persist status"
+
+    mkfs.ext4 -q -F -m 1 -L "$LABEL" -E lazy_itable_init=1,lazy_journal_init=1 "$part" \
+        || die "mkfs.ext4 failed on $part"
+    say "created $part"
+    say "Reboot and choose \"Ketchup persistent\" in the boot menu."
+}
+
+cmd_reset() {
+    local part mnt
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --yes|-y) YES=1 ;;
+            *) die "unknown option '$1'" ;;
+        esac
+        shift
+    done
+    as_root
+    check_medium
+    persistent_session && die "this session is using the persistent data; reboot into a non-persistent entry first"
+    part=$(persist_partition) || true
+    [ -n "$part" ] || die "no $LABEL partition found"
+    confirm "Erase everything saved on $part?" || die "cancelled"
+    mnt=$(mktemp -d)
+    mount -o nosuid,nodev,noexec "$part" "$mnt" || { rmdir "$mnt"; die "cannot mount $part"; }
+    find "$mnt" -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf --one-file-system {} +
+    umount "$mnt"; rmdir "$mnt"
+    say "persistent data erased"
+}
+
+main() {
+    ARGS=("$@")
+    YES=0; DRY=0
+    case "${1:-}" in
+        status)  shift; cmd_status "$@" ;;
+        create)  shift; cmd_create "$@" ;;
+        reset)   shift; cmd_reset "$@" ;;
+        -h|--help|help|"") usage ;;
+        *) usage >&2; exit 2 ;;
+    esac
+}
+
+# Sourced by the tests, run normally otherwise.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then main "$@"; fi

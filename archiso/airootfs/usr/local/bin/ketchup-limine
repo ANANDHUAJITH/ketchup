@@ -52,6 +52,21 @@ make_base_cmdline() {
     echo "$line"
 }
 
+# Options that only make sense on the live medium (archiso, persistence). They must never end
+# up in an installed system's menu, even if someone copied them into the files above.
+strip_live_args() {
+    local word kept=() dropped=()
+    read -ra words <<< "$1"
+    for word in "${words[@]}"; do
+        case "$word" in
+            cow_*=*|archiso*=*|copytoram=*) dropped+=("$word") ;;
+            *) kept+=("$word") ;;
+        esac
+    done
+    [ "${#dropped[@]}" -gt 0 ] && log "ignoring live-medium kernel options: ${dropped[*]}" >&2
+    echo "${kept[*]}"
+}
+
 extra_opts() { [ -f "$EXTRAFILE" ] && tr '\n' ' ' < "$EXTRAFILE" || echo "$DEFAULT_EXTRA"; }
 
 # ---------------------------------------------------------------- menu generation
@@ -59,7 +74,7 @@ generate_conf() {
     local out="$1" base extra pin=0 compat kimg base_name n ucode="" p
     base="$(tr '\n' ' ' < "$CMDFILE")"; extra="$(extra_opts)"
     [ -f "$PINFILE" ] && pin=1
-    base="$(echo $base)"; extra="$(echo $extra)"               # normalise whitespace
+    base="$(strip_live_args "$base")"; extra="$(strip_live_args "$extra")"   # also normalises whitespace
     compat="$(echo ${extra//noirqdebug/} irqpoll pci=nomsi)"
     h() { [ "$pin" = 1 ] && echo "#$(b2 "$1")"; }       # "#hash" suffix when pinned
 

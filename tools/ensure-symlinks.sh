@@ -52,6 +52,9 @@ MANIFEST=(
 
     # --- packaged timers
     "$SYSD/timers.target.wants/fstrim.timer|$UNITS/fstrim.timer"
+
+    # --- masked: the keyring WKD sync timer; an /etc mask survives archlinux-keyring updates
+    "$SYSD/archlinux-keyring-wkd-sync.timer|/dev/null"
 )
 
 bad=0 fixed=0

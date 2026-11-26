@@ -87,7 +87,7 @@ fi
 
 sec "Packages and supply chain"
 if [ -r /etc/pacman.conf ]; then
-    grep -qiE '^SigLevel.*(TrustAll|Never)' /etc/pacman.conf && add FAIL "pacman accepts unsigned/untrusted packages" "$(grep -iE '^SigLevel.*(TrustAll|Never)' /etc/pacman.conf | tr '\n' ';')  Fix: set 'SigLevel = Required DatabaseOptional' (the installer does this once the CachyOS keyring is present)."
+    grep -qiE '^SigLevel.*(TrustAll|Never)' /etc/pacman.conf && add FAIL "pacman accepts unsigned/untrusted packages" "$(grep -iE '^SigLevel.*(TrustAll|Never)' /etc/pacman.conf | tr '\n' ';')  Fix: remove the SigLevel override (or set it to 'Required DatabaseOptional') once the repo's own key is imported into pacman-key."
     grep -qiE '^SigLevel' /etc/pacman.conf && ! grep -qiE '^SigLevel.*(TrustAll|Never)' /etc/pacman.conf && add PASS "pacman verifies package signatures"
     sig="$(awk '/^\[/{s=$0} /^SigLevel/{print s" "$0}' /etc/pacman.conf | grep -i optional | grep -vi 'DatabaseOptional' | head -3)"
     [ -n "$sig" ] && add WARN "a repository has optional package signatures" "$sig"

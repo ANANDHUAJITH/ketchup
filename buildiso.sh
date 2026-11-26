@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2034  # variables are used by the sourced util-*.sh files
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -65,6 +66,7 @@ import ${src_dir}/util-iso-mount.sh
 check_requirements
 
 for sig in TERM HUP QUIT; do
+    # shellcheck disable=SC2064  # $sig is meant to expand now, once per signal
     trap "trap_exit $sig \"$(gettext "%s signal caught. Exiting...")\" \"$sig\"" "$sig"
 done
 trap 'trap_exit INT "$(gettext "Aborted by user! Exiting...")"' INT

@@ -40,6 +40,7 @@ file_permissions=(
   ["/usr/local/bin/ketchup-irqfix"]="0:0:755"
   ["/usr/local/bin/ketchup-lens"]="0:0:755"
   ["/usr/local/bin/ketchup-audit"]="0:0:755"
+  ["/usr/local/bin/ketchup-persist"]="0:0:755"
   ["/usr/local/bin/pkexec-wrapper"]="0:0:755"
   ["/usr/local/bin/ketchup-blue-core"]="0:0:755"
   ["/usr/local/bin/mythical-blue-ketchup"]="0:0:755"

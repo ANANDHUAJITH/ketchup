@@ -1,1 +1,11 @@
-../ketchup-notify.timer
+[Unit]
+Description=Periodically check Ketchup's notif.yml for new announcements
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=30min
+RandomizedDelaySec=2min
+Persistent=false
+
+[Install]
+WantedBy=timers.target

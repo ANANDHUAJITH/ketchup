@@ -21,6 +21,8 @@ press Enter.
   and subvolumes.
 - The live image reads its root filesystem from the boot medium (`copytoram=n`) instead of
   copying it into RAM.
+- Optional persistent live USB: files, settings and installed programs survive reboots
+  (see [Persistent live USB](#persistent-live-usb)).
 - zram with zstd, weekly `fstrim`, BBR, per-device I/O scheduler rules, and configuration
   for `ananicy-cpp`, `scx_lavd` and `systemd-oomd`.
 - Flatpak with Flathub, Podman and Distrobox.
@@ -41,6 +43,33 @@ To build locally on an Arch system with `archiso`, `squashfs-tools`, `libisoburn
 Run `./buildiso.sh -h` for the options. `tools/ensure-symlinks.sh` recreates the systemd
 symlinks the image depends on; the build runs it automatically, and `--check` reports any
 that are missing.
+
+## Persistent live USB
+
+Write the ISO to a USB stick that is larger than the ISO, boot the normal entry and run:
+
+```bash
+ketchup-persist create        # makes an ext4 partition labelled KETCHUP_PERSIST in the free space
+```
+
+Reboot and pick **Ketchup persistent** in the boot menu. `ketchup-persist status` shows the
+state, `ketchup-persist reset` erases the saved data. The data is not encrypted and belongs to
+one ISO release. Details and limits are in
+[`PERSISTENCE.md`](archiso/airootfs/usr/share/doc/ketchup/PERSISTENCE.md).
+
+## Virtual machines
+
+niri needs a GPU with OpenGL, so a VM needs a virtio GPU with 3D acceleration, for example
+`-device virtio-vga-gl -display sdl,gl=on` in QEMU. See
+[`RUNNING-IN-A-VM.md`](archiso/airootfs/usr/share/doc/ketchup/RUNNING-IN-A-VM.md).
+
+## Verifying a download
+
+Each release lists `SHA256SUMS`. Check the ISO with
+`sha256sum -c SHA256SUMS --ignore-missing`. When the release also contains `SHA256SUMS.asc`
+and `signing-key.asc`, verify the signature with
+`gpg --import signing-key.asc && gpg --verify SHA256SUMS.asc SHA256SUMS` and compare the key
+fingerprint with the one in the release notes.
 
 ## Updates
 
@@ -70,6 +99,7 @@ Details, including what to publish for the package repository and `notif.yml`, a
 | `ketchup-man` | Show the manual of Ketchup commands (`-l` for a list, `-k WORD` to search) |
 | `ketchup-audit` | Security self-check; `--lynis` adds Lynis, `--json` prints JSON |
 | `ketchup-irqfix` | Identify the device behind an `irq N: nobody cared` message and apply a fix |
+| `ketchup-persist` | Create, inspect or erase the persistence partition of a live USB stick |
 | `ketchup-mirrors` | Rank Arch mirrors by speed |
 | `ketchup-v3` | Opt in to x86-64-v3 packages from the CachyOS repositories (`ketchup-v3 off` undoes it) |
 | `ketchup-apps-location` | Choose where Flatpak apps and Distrobox containers are stored |

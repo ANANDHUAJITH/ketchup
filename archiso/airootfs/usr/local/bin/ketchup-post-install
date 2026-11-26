@@ -61,7 +61,8 @@ rm -f /etc/systemd/system/pacman-init.service \
       /usr/share/applications/ketchup-install.desktop \
       /etc/tmpfiles.d/ketchup-liveuser.conf \
       /usr/local/bin/ketchup-install /usr/local/bin/ketchup-installer-theme \
-      /usr/local/bin/ketchup-pre-initramfs
+      /usr/local/bin/ketchup-pre-initramfs \
+      /usr/local/bin/ketchup-persist /usr/share/doc/ketchup/PERSISTENCE.md
 rm -rf /etc/calamares /usr/share/calamares /usr/share/ketchup/calamares /usr/share/ketchup/installer-themes \
        /usr/lib/ketchup-compat /etc/ld.so.conf.d/ketchup-compat.conf /etc/skel/Desktop \
        /etc/skel/.config/{niri,noctalia,systemd}/*.bak
@@ -70,12 +71,8 @@ printf '[Journal]\nSystemMaxUse=200M\n' > /etc/systemd/journald.conf.d/volatile-
 # The live image ships an empty root password; lock it (administration goes through sudo).
 passwd -l root >/dev/null 2>&1
 
+# The keyring is copied from the live image; this only repairs an incomplete copy.
 pacman-key --init >/dev/null 2>&1 && pacman-key --populate archlinux cachyos >/dev/null 2>&1
-# The live image trusts the CachyOS repository without signatures so it can be built;
-# an installed system verifies them once the keyring is populated.
-if pacman-key --list-keys 2>/dev/null | grep -qi cachyos; then
-    sed -i '/^\[cachyos\]/,/^$/ s/^SigLevel.*/SigLevel = Required DatabaseOptional/' /etc/pacman.conf
-fi
 
 # Seed the persistent asset directory without overwriting anything already there.
 mkdir -p /var/lib/ketchup/assets/wallpapers

@@ -32,6 +32,7 @@ the live session is deliberately open (autologin, passwordless sudo, empty passw
 **Boot chain** (`ketchup-audit` → "Boot chain")
 * Secure Boot: `mokutil --sb-state` or the audit line. Limine can boot under Secure Boot only if you sign it
   (or use shim); out of the box Ketchup does **not** enable Secure Boot. Be honest about that in your threat model.
+* Live USB persistence (`ketchup-persist`) exists only on the live medium. Check an installed system: `grep -riE 'cow_|archiso|persist' /boot/limine.conf` prints nothing and `command -v ketchup-persist` finds nothing. On a persistent stick the saved data is trusted as part of the running system and is not encrypted, and the label `KETCHUP_PERSIST` on any attached disk is used (`tools/test-installed-boot.sh` covers the installed side).
 * Boot-menu editor must be off on installed systems (`editor_enabled: no`, done by `ketchup-limine`), otherwise `init=/bin/bash` is a root shell.
 * Tamper detection: `sudo ketchup-limine pin on` adds BLAKE2b hashes of kernel, initramfs, microcode and enrolls the config hash
   into the EFI loader. Tested: flipping one byte of the kernel makes Limine stop with "Blake2b hash ... does not match".
@@ -54,10 +55,12 @@ the live session is deliberately open (autologin, passwordless sudo, empty passw
 **Services / sandboxing**: `systemd-analyze security` lists every service with an exposure score; harden the worst with drop-ins (`ProtectSystem=strict`, `NoNewPrivileges=yes`...).
 
 **Supply chain** (this is where an OS project is most often weak)
-* Every package must be signature-checked. The **live image and the build** trust the CachyOS repo with `SigLevel = Optional TrustAll`
-  (`archiso/pacman.conf`, `airootfs/etc/pacman.conf`) because the build container has no CachyOS key. The installer switches the installed system to
-  `Required DatabaseOptional` after the CachyOS keyring is imported; `ketchup-audit` fails if it is still `TrustAll`. To fix the build side too:
-  import and locally sign the CachyOS key in `ci-build.sh` (see CachyOS docs for the current key id) and drop `TrustAll`.
+* Every package must be signature-checked. `ci-build.sh` fetches `cachyos-keyring` directly (verified only by `LocalFileSigLevel`, the
+  same trust any manually downloaded package file gets) and installs it before the `[cachyos]` repo is even added to the build
+  container's `/etc/pacman.conf`, so the CachyOS key is already trusted by the time any `[cachyos]` package is pulled. Neither
+  `archiso/pacman.conf` nor the shipped `airootfs/etc/pacman.conf` carries a `SigLevel` override for `[cachyos]` any more: it inherits
+  the global `Required DatabaseOptional`, same as `[core]`/`[extra]`, on the live image, the build and the installed system alike.
+  `ketchup-audit` fails if it is ever `TrustAll` again.
 * The build downloads files at build time without pinning (`util-iso.sh`: CachyOS mirrorlist from GitHub `master`, old boost from the Arch Linux Archive). Pin by commit/checksum.
 * Releases: the workflow publishes `sha256` files. Add a detached signature (`gpg --detach-sign` or `minisign`) with a key whose public half is in the repo/README,
   otherwise a checksum on the same server proves nothing against a compromised server.

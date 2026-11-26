@@ -58,7 +58,7 @@ done
 # ---------------------------------------------------------------- manifest / notify
 fetch_release_manifest() {  # prints "VERSION CODENAME" on stdout, or nothing if unreachable
     local tmp; tmp="$(mktemp)"
-    curl -fsSL --max-time 15 "$KETCHUP_RELEASE_MANIFEST_URL" -o "$tmp" 2>/dev/null || { rm -f "$tmp"; return 1; }
+    curl -fsSL --proto '=https' --proto-redir '=https' --max-time 15 --max-filesize 65536 "$KETCHUP_RELEASE_MANIFEST_URL" -o "$tmp" 2>/dev/null || { rm -f "$tmp"; return 1; }
     if command -v python3 >/dev/null && python3 -c 'import yaml' 2>/dev/null; then
         python3 -c '
 import sys, yaml

@@ -23,7 +23,7 @@ ketchup_notify_send() {  # ketchup_notify_send "title" "body" [urgency: low|norm
         sudo -u "$s_user" \
             DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime/bus" \
             XDG_RUNTIME_DIR="$runtime" \
-            notify-send -u "$urgency" -i "$icon" -a Ketchup "$title" "$body" \
+            notify-send -u "$urgency" -i "$icon" -a Ketchup -- "$title" "$body" \
             >/dev/null 2>&1 && sent=1
     done
     # always log, so the message is not lost when nobody is logged in graphically
@@ -35,11 +35,18 @@ ketchup_notify_send() {  # ketchup_notify_send "title" "body" [urgency: low|norm
 # ketchup-upgrade rollback does not show old announcements again.
 KETCHUP_NOTIFY_STATE_DIR="${KETCHUP_NOTIFY_STATE_DIR:-/var/lib/ketchup/notify}"
 
+# The id comes from a file downloaded from the network and becomes a file name, so it must be
+# a plain name: no slashes, no leading dot, no spaces.
+ketchup_notify_valid_id() {
+    [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]
+}
+
 ketchup_notify_seen() {  # ketchup_notify_seen ID  -> true if already shown
-    [ -f "$KETCHUP_NOTIFY_STATE_DIR/$1.seen" ]
+    ketchup_notify_valid_id "$1" && [ -f "$KETCHUP_NOTIFY_STATE_DIR/$1.seen" ]
 }
 
 ketchup_notify_mark_seen() {
+    ketchup_notify_valid_id "$1" || return 1
     mkdir -p "$KETCHUP_NOTIFY_STATE_DIR"
     : > "$KETCHUP_NOTIFY_STATE_DIR/$1.seen"
     # keep the 50 most recent ids

@@ -96,7 +96,8 @@ die() {
 
 import(){
     if [[ -r $1 ]]; then
-        source $1
+        # shellcheck source=/dev/null
+        source "$1"
     else
         die "Could not import $1"
     fi

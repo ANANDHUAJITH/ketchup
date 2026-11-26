@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2154,SC2034  # variables are set by buildiso.sh
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation; version 2 of the License.
@@ -9,12 +10,12 @@
 # GNU General Public License for more details.
 
 get_timer(){
-    echo $(date +%s)
+    date +%s
 }
 
 # $1: start timer
 elapsed_time(){
-    echo $(echo $1 $(get_timer) | awk '{ printf "%0.2f",($2-$1)/60 }')
+    echo "$1 $(get_timer)" | awk '{ printf "%0.2f",($2-$1)/60 }'
 }
 
 show_elapsed_time(){
@@ -50,11 +51,11 @@ check_requirements(){
         # Just checking if installation was successful
         if pacman -Qi $package &> /dev/null; then
             echo "################################################################"
-            echo "#########  "$package" has been installed"
+            echo "#########  $package has been installed"
             echo "################################################################"
         else
             echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-            echo "!!!!!!!!!  "$package" has NOT been installed"
+            echo "!!!!!!!!!  $package has NOT been installed"
             echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
             exit 1
         fi
@@ -72,7 +73,7 @@ load_vars() {
 
     local var
     for var in {SRC,SRCPKG,PKG,LOG}DEST MAKEFLAGS PACKAGER CARCH GPGKEY; do
-        [[ -z ${!var} ]] && eval $(grep -a "^${var}=" "$1")
+        [[ -z ${!var} ]] && eval "$(grep -a "^${var}=" "$1")"
     done
 
     return 0

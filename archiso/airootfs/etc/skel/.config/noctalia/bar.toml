@@ -1,0 +1,63 @@
+# Ketchup bar layout: workspaces + a compact CPU/temp/RAM group on the left, the clock
+# centered, and status widgets on the right - ported from the "glassy-niri" bar.json.
+#
+# That source file is Noctalia v4's JSON config (see its own "minNoctaliaVersion": "4.x" in
+# its plugin manifests). Noctalia v5, which Ketchup ships, does not read v4 settings at all
+# ("v5 is a fresh install... v4 settings are not migrated into v5" - Noctalia FAQ), so this is
+# a hand port of the widget layout to v5's TOML schema, not a copy of the file.
+#
+# The one deliberate change from the source: background_opacity is 1.0 (solid) here, not the
+# source's 0 (fully transparent/"glass"). Everything else is set to match it as closely as v5's
+# widget set allows.
+#
+# Two widgets from the source could not be ported: its Cloudflare WARP and KDE Connect bar
+# plugins are also v4-only (same "minNoctaliaVersion" issue, and v5 plugins use a different
+# id scheme: "<author>/<plugin>:<entry>"). Check Settings -> Plugins for v5-native versions.
+#
+# Noctalia evolves fast; if a key below has moved, `noctalia config validate` lists exactly
+# what to fix, and Settings -> Bar edits the same file live.
+
+[bar.default]
+position = "top"
+background_opacity = 1.0   # solid; the source used 0 (fully transparent)
+shadow = true
+capsule = false
+
+start = ["cpu", "cpu-temp", "ram", "workspaces"]
+center = ["clock"]
+end = ["tray", "volume", "brightness", "battery", "notifications"]
+
+[widget.cpu]
+type = "sysmon"
+stat = "cpu_usage"
+capsule_group = "sysmon"
+
+[widget.cpu-temp]
+type = "sysmon"
+stat = "cpu_temp"
+capsule_group = "sysmon"
+
+[widget.ram]
+type = "sysmon"
+stat = "ram_used"
+capsule_group = "sysmon"
+
+[widget.workspaces]
+display = "id"
+focused_color = "primary"
+occupied_color = "secondary"
+empty_color = "secondary"
+
+[widget.clock]
+format = "{:%-I:%M %p %a, %b %-d}"
+tooltip_format = "{:%-I:%M %p %a, %b %-d}"
+
+[widget.volume]
+device = "output"
+peek = true        # show the level only on hover, like the source's displayMode "onhover"
+
+[widget.brightness]
+peek = true
+
+[widget.battery]
+device = "auto"

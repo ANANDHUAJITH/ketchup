@@ -20,9 +20,21 @@ sec "Failed units";          systemctl --failed --no-pager 2>&1
 sec "Installer (calamares) libraries"
 if command -v calamares >/dev/null; then ldd "$(command -v calamares)" 2>&1 | grep -E 'not found|boost' ; ls /usr/lib/ketchup-compat 2>&1 | head; else echo "calamares not installed"; fi
 sec "Branding";              cat /etc/os-release
+sec "Virtualization / graphics"
+_virt="$(systemd-detect-virt 2>/dev/null || echo none)"
+echo "systemd-detect-virt: $_virt"
+echo "/dev/dri: $(ls /dev/dri 2>/dev/null | tr '\n' ' ')"
+for c in /sys/class/drm/card*/device/driver; do [ -e "$c" ] && echo "DRM driver: $(basename "$(readlink -f "$c")")"; done
+grep -qw nomodeset /proc/cmdline && echo "!! booted with nomodeset: niri cannot start; use the normal boot entry"
+journalctl -b --no-pager 2>/dev/null | grep -qiE 'niri::backend::tty|failed to create (compositor|any) backend|no drm device found' \
+    && echo "!! compositor DRM backend failure in the journal: journalctl -b -u greetd; journalctl -b --user -u niri"
 sec "Journal errors (this boot)"; journalctl -b -p err --no-pager 2>/dev/null | tail -30
 } > "$out" 2>&1
 echo "Wrote $out ($(wc -l < "$out") lines)."
 echo "Quick summary:"; systemd-analyze 2>/dev/null | head -1
 free -h | sed -n 1,2p
 grep -qiE 'nobody cared' <(dmesg 2>/dev/null) && echo "!! 'nobody cared' IRQ message seen: run 'ketchup-irqfix N' (N = the IRQ number) to see which device owns it; the live menu has an 'IRQ troubleshooting' submenu." || true
+if [ "$(systemd-detect-virt 2>/dev/null)" != none ] && ! ls /dev/dri/renderD* >/dev/null 2>&1; then
+    echo "!! VM ($(systemd-detect-virt)) without a GPU render node: niri needs a virtio GPU with 3D acceleration."
+    echo "   See /usr/share/doc/ketchup/RUNNING-IN-A-VM.md"
+fi

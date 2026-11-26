@@ -21,7 +21,7 @@ URL="${KETCHUP_NOTIFY_URL:-https://raw.githubusercontent.com/ANANDHUAJITH/ketchu
 FORCE=0; [ "${1:-}" = "--force" ] && FORCE=1
 
 tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
-if ! curl -fsSL --max-time 15 "$URL" -o "$tmp"; then
+if ! curl -fsSL --proto '=https' --proto-redir '=https' --max-time 15 --max-filesize 65536 "$URL" -o "$tmp"; then
     logger -t ketchup-notify "could not fetch $URL (offline, or not published yet)"
     exit 0
 fi
@@ -46,6 +46,7 @@ print(d.get(sys.argv[2], "") or "")
 
 id="$(read_field id)"
 [ -n "$id" ] || { logger -t ketchup-notify "notif.yml has no 'id:' field, skipping"; exit 0; }
+ketchup_notify_valid_id "$id" || { logger -t ketchup-notify "notif.yml id is not a plain name, skipping"; exit 0; }
 
 if [ "$FORCE" = 0 ] && ketchup_notify_seen "$id"; then
     exit 0
